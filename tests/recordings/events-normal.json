@@ -1,0 +1,130 @@
+{
+  "tool": "calendar.events",
+  "params": {
+    "calendars": [
+      {
+        "name": "Work",
+        "secret": "CALENDAR_ICS_URL"
+      },
+      {
+        "name": "Family",
+        "secret": "CALENDAR_ICS_URL_FAMILY"
+      }
+    ],
+    "start": "2026-10-15",
+    "days": 14,
+    "timezone": "Europe/Paris"
+  },
+  "expect": {
+    "data": {
+      "window": {
+        "start": "2026-10-15T00:00:00+02:00",
+        "end": "2026-10-29T00:00:00+01:00",
+        "timezone": "Europe/Paris",
+        "days": 14
+      },
+      "complete": true,
+      "calendars": [
+        {
+          "name": "Work",
+          "ok": true,
+          "events": 3,
+          "skipped": 0
+        },
+        {
+          "name": "Family",
+          "ok": true,
+          "events": 4,
+          "skipped": 0
+        }
+      ],
+      "events": [
+        {
+          "id": "calendar:standup-1-example.org:20261015T073000Z::ecb3be8727a36917",
+          "calendar": "Work",
+          "title": "Team standup",
+          "start": "2026-10-15T09:30:00+02:00",
+          "end": "2026-10-15T09:45:00+02:00",
+          "all_day": false,
+          "location": "Room 1",
+          "description": null,
+          "status": "confirmed",
+          "recurring": true
+        },
+        {
+          "id": "calendar:trip-1-example.org::d2e8608c880247fe",
+          "calendar": "Family",
+          "title": "Trip",
+          "start": "2026-10-18",
+          "end": "2026-10-23",
+          "all_day": true,
+          "location": null,
+          "description": null,
+          "status": "confirmed",
+          "recurring": false
+        },
+        {
+          "id": "calendar:standup-1-example.org:20261022T073000Z::8f07e62204866eb0",
+          "calendar": "Work",
+          "title": "Team standup",
+          "start": "2026-10-22T09:30:00+02:00",
+          "end": "2026-10-22T09:45:00+02:00",
+          "all_day": false,
+          "location": "Room 1",
+          "description": null,
+          "status": "confirmed",
+          "recurring": true
+        },
+        {
+          "id": "calendar:birthday-1-example.org:20261023::bd3f1030c5479fda",
+          "calendar": "Family",
+          "title": "Birthday",
+          "start": "2026-10-23",
+          "end": "2026-10-24",
+          "all_day": true,
+          "location": null,
+          "description": null,
+          "status": "confirmed",
+          "recurring": true
+        },
+        {
+          "id": "calendar:holiday-1-example.org::c4547f5db91436e9",
+          "calendar": "Family",
+          "title": "School holiday",
+          "start": "2026-10-23",
+          "end": "2026-10-24",
+          "all_day": true,
+          "location": null,
+          "description": null,
+          "status": "confirmed",
+          "recurring": false
+        },
+        {
+          "id": "calendar:after-1-example.org::aaec150421210b87",
+          "calendar": "Family",
+          "title": "After the window",
+          "start": "2026-10-25",
+          "end": "2026-10-26",
+          "all_day": true,
+          "location": null,
+          "description": null,
+          "status": "confirmed",
+          "recurring": false
+        },
+        {
+          "id": "calendar:standup-1-example.org:20261026T083000Z::d95bd187c70bc4f5",
+          "calendar": "Work",
+          "title": "Team standup",
+          "start": "2026-10-26T09:30:00+01:00",
+          "end": "2026-10-26T09:45:00+01:00",
+          "all_day": false,
+          "location": "Room 1",
+          "description": null,
+          "status": "confirmed",
+          "recurring": true
+        }
+      ]
+    },
+    "intents": []
+  }
+}

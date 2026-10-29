@@ -1,0 +1,99 @@
+{
+  "tool": "calendar.events",
+  "params": {
+    "calendars": [
+      {
+        "name": "Club",
+        "secret": "CALENDAR_ICS_URL_OTHER"
+      }
+    ],
+    "start": "2026-10-21",
+    "days": 5,
+    "timezone": "Europe/Paris",
+    "extra_hosts": [
+      "ics.example.org"
+    ]
+  },
+  "expect": {
+    "data": {
+      "window": {
+        "start": "2026-10-21T00:00:00+02:00",
+        "end": "2026-10-26T00:00:00+01:00",
+        "timezone": "Europe/Paris",
+        "days": 5
+      },
+      "complete": true,
+      "calendars": [
+        {
+          "name": "Club",
+          "ok": true,
+          "events": 5,
+          "skipped": 0
+        }
+      ],
+      "events": [
+        {
+          "id": "calendar:daily-sync-1-example.org:20261021T080000Z::f174a985cec89d38",
+          "calendar": "Club",
+          "title": "Daily sync",
+          "start": "2026-10-21T10:00:00+02:00",
+          "end": "2026-10-21T10:30:00+02:00",
+          "all_day": false,
+          "location": null,
+          "description": null,
+          "status": "confirmed",
+          "recurring": true
+        },
+        {
+          "id": "calendar:daily-sync-1-example.org:20261022T080000Z::c510239123dda6b3",
+          "calendar": "Club",
+          "title": "Daily sync (moved)",
+          "start": "2026-10-22T14:00:00+02:00",
+          "end": "2026-10-22T14:30:00+02:00",
+          "all_day": false,
+          "location": "Room 2",
+          "description": null,
+          "status": "confirmed",
+          "recurring": true
+        },
+        {
+          "id": "calendar:daily-sync-1-example.org:20261024T080000Z::73e5e1a46b733de0",
+          "calendar": "Club",
+          "title": "Daily sync",
+          "start": "2026-10-24T10:00:00+02:00",
+          "end": "2026-10-24T10:30:00+02:00",
+          "all_day": false,
+          "location": null,
+          "description": null,
+          "status": "confirmed",
+          "recurring": true
+        },
+        {
+          "id": "calendar:daily-sync-1-example.org:20261029T090000Z::7a3d4aba83b4b9d9",
+          "calendar": "Club",
+          "title": "Daily sync (moved in)",
+          "start": "2026-10-24T18:00:00+02:00",
+          "end": "2026-10-24T18:30:00+02:00",
+          "all_day": false,
+          "location": null,
+          "description": null,
+          "status": "confirmed",
+          "recurring": true
+        },
+        {
+          "id": "calendar:daily-sync-1-example.org:20261025T090000Z::9726d8fe3d7d24c7",
+          "calendar": "Club",
+          "title": "Daily sync",
+          "start": "2026-10-25T10:00:00+01:00",
+          "end": "2026-10-25T10:30:00+01:00",
+          "all_day": false,
+          "location": null,
+          "description": null,
+          "status": "confirmed",
+          "recurring": true
+        }
+      ]
+    },
+    "intents": []
+  }
+}

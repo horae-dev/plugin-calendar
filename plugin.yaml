@@ -4,14 +4,17 @@
 name: calendar
 version: 0.1.0
 horae: '>=0'
-description: Proposes a task to reply to each message of a folder.
+description: Calendar events from ICS feeds (Proton, Google), recurrences expanded.
 license: Apache-2.0
 provides:
   sources:
-  - calendar.inbox
+  - calendar.events
 permissions:
-  intents:
-  - task.create
+  network:
+  - calendar.google.com
+  - calendar.proton.me
+  secrets:
+  - CALENDAR_ICS_URL
 runtime:
   protocol: mcp-stdio
   command:

@@ -128,9 +128,9 @@ A feed is untrusted, so reading it is bounded:
   each side of the window do not count. At most 2000 events in all.
 - **time:** each feed is expanded in a worker thread, off the event loop, within 5 s of
   wall-clock time; the series not reached by then are counted in `truncated`.
-- **rules:** each series may take at most 100,000 steps of `dateutil`'s rule iterator to
-  reach the window (about 270 years of a daily rule, 11 years of an hourly one, from its
-  `DTSTART`). A rule that never matches (`FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30`) would
+- **rules:** each series may take at most 20,000 steps of `dateutil`'s rule iterator to
+  reach the window (about 55 years of a daily rule, 380 of a weekly one, 2 of an hourly
+  one, from its `DTSTART`); an older series is skipped and counted in `skipped`. A rule that never matches (`FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30`) would
   otherwise step to the year 9999; it is skipped and counted in `skipped`. Rules repeating
   every second or minute are skipped too.
 - **size:** 10 MiB per feed once decompressed, 50,000 events per feed (`too_many_events`).

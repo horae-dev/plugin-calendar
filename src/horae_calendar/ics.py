@@ -28,7 +28,7 @@ RECURRENCE-ID overrides including `RANGE=THISANDFUTURE`, VTIMEZONE definitions, 
   margin days do not count;
 - `expand` is meant to run in a worker thread with a wall-clock `budget_s` (5 s by default):
   when it runs out, the series not yet expanded are counted in `truncated`;
-- each series may take at most `MAX_RULE_STEPS` steps of `dateutil`'s rule iterator
+- each series may take at most `MAX_RULE_STEPS` (20,000) steps of `dateutil`'s rule iterator
   (`_guarded`): a rule that cannot reach the window cheaply (one that never matches, such as
   `FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30`, or a fast one from a distant `DTSTART`) is skipped
   and counted in `skipped` instead of spinning to the year 9999;
@@ -73,9 +73,9 @@ MAX_PER_FEED = 2000
 MAX_GENERATED = 10 * MAX_PER_SERIES
 """Occurrences generated for one series, cancelled and margin ones included, before it is
 cut short."""
-MAX_RULE_STEPS = 100_000
-"""Steps of `dateutil`'s rule iterator for one series (about 0.05 s): 270 years of a daily
-rule, 11 of an hourly one, from its DTSTART to the window."""
+MAX_RULE_STEPS = 20_000
+"""Steps of `dateutil`'s rule iterator for one series (about 0.02 s): 55 years of a daily
+rule, 380 of a weekly one, 2 of an hourly one, from its DTSTART to the window."""
 BUDGET_S = 5.0
 """Wall-clock time for expanding one feed."""
 MAX_COMPONENTS = 50_000
@@ -140,34 +140,37 @@ class _Guard:
 
 
 _local = threading.local()
-
-
-def _tick() -> None:
-    guard: _Guard | None = getattr(_local, "guard", None)
-    if guard is not None:
-        guard.tick()
+"""`_local.guard`: the `_Guard` of the expansion running in this thread, if any."""
 
 
 if hasattr(_rrule, "_iterinfo"):  # dateutil 2.x: one `getdayset` call per iterator step
 
     class _GuardedIterInfo(_rrule._iterinfo):  # type: ignore[misc]
-        """dateutil's per-iteration helper, counting the steps of the current thread's
-        `_Guard` (no effect in a thread without one)."""
+        """dateutil's per-iteration helper (one per rule iteration), counting the steps
+        against the `_Guard` of the thread that started the iteration (none: no effect)."""
+
+        def __init__(self, rule: Any) -> None:
+            super().__init__(rule)
+            self.guard: _Guard | None = getattr(_local, "guard", None)
 
         def ydayset(self, *args: Any) -> Any:
-            _tick()
+            if self.guard is not None:
+                self.guard.tick()
             return super().ydayset(*args)
 
         def mdayset(self, *args: Any) -> Any:
-            _tick()
+            if self.guard is not None:
+                self.guard.tick()
             return super().mdayset(*args)
 
         def wdayset(self, *args: Any) -> Any:
-            _tick()
+            if self.guard is not None:
+                self.guard.tick()
             return super().wdayset(*args)
 
         def ddayset(self, *args: Any) -> Any:
-            _tick()
+            if self.guard is not None:
+                self.guard.tick()
             return super().ddayset(*args)
 
     _rrule._iterinfo = _GuardedIterInfo

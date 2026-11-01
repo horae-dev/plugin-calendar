@@ -315,10 +315,17 @@ def test_rules_that_never_reach_the_window_are_skipped_in_time() -> None:
 
 
 def test_a_far_dtstart_within_the_step_budget_is_expanded() -> None:
-    data = calendar("UID:old\nDTSTART:19710101T090000Z\nRRULE:FREQ=DAILY\nSUMMARY:Old daily")
-    result = expand(data, "Cal", window("2026-10-23", 1, "UTC"))
-    assert [e.title for e in result.events] == ["Old daily"]
-    assert result.complete
+    """A daily rule from 1980 (17,100 steps) and a weekly one from 1900 (6,600) are fine;
+    a daily one from 1960 (24,400) is not."""
+    data = calendar("UID:old\nDTSTART:19800101T090000Z\nRRULE:FREQ=DAILY\nSUMMARY:Old daily")
+    data = calendar(
+        "UID:old\nDTSTART:19800101T090000Z\nRRULE:FREQ=DAILY\nSUMMARY:Old daily",
+        "UID:wk\nDTSTART:19000105T090000Z\nRRULE:FREQ=WEEKLY\nSUMMARY:Old weekly",
+        "UID:too\nDTSTART:19600101T090000Z\nRRULE:FREQ=DAILY\nSUMMARY:Too old",
+    )
+    result = expand(data, "Cal", window("2026-10-23", 7, "UTC"))
+    assert {e.title for e in result.events} == {"Old daily", "Old weekly"}
+    assert result.skipped == 1
 
 
 def test_the_time_budget_stops_the_feed() -> None:

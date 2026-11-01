@@ -1,0 +1,21 @@
+{
+  "tool": "calendar.events",
+  "params": {
+    "calendars": [
+      {
+        "name": "Work",
+        "index": 1
+      },
+      {
+        "name": "Down",
+        "index": 5
+      }
+    ],
+    "start": "2026-10-22",
+    "days": 2,
+    "timezone": "Europe/Paris"
+  },
+  "expect": {
+    "error": "calendar failed: Down: timeout"
+  }
+}

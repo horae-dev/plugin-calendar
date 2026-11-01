@@ -1,0 +1,2 @@
+# Synthetic ICS feeds are byte-exact (CRLF, control characters): never normalised.
+tests/fixtures/ics/*.ics -text

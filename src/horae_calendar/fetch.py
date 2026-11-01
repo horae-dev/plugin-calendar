@@ -14,16 +14,17 @@ data or in a recording. Every failure is a `FetchError` with a fixed `reason` co
 - `https` only (`webcal://`, what calendar apps show, is read as `https://`); no user info;
   the default port only; the host must be one of the allowed hosts (`check_url`);
 - `trust_env=False`: no proxy, `.netrc` or CA bundle from the environment;
-- a timeout for connecting and for each read, and a total deadline for the whole fetch,
-  retries included;
+- a timeout for connecting (5 s) and for each read (8 s), a budget for each attempt (9 s),
+  and a total deadline for the whole fetch (20 s), retries included, so a retry always has
+  its own budget left;
 - at most `max_bytes` (10 MiB by default) **after** decompression, so a gzip bomb stops at
   the cap; a larger `Content-Length` is refused before reading;
 - **redirects: only to the same scheme, host and port, at most 3.** A share link that is
   moved within its service (a path normalised, a new feed path) still works, while a
   redirect can never send the token-bearing request, or the user's trust, to another host:
   the allow-list holds for every hop. Any other redirect fails with `redirect_refused`;
-- one retry, at once, after a timeout, a connection error or a 500, 502, 503 or 504; never
-  after 429 or another 4xx.
+- one retry, after a short pause (0.5 s), after a timeout, a connection error or a 500, 502,
+  503 or 504, when enough of the deadline is left; never after 429 or another 4xx.
 """
 
 import asyncio
@@ -38,7 +39,12 @@ import httpx
 
 MAX_BYTES = 10 * 1024 * 1024
 TIMEOUT_S = 20.0
+ATTEMPT_TIMEOUT_S = 9.0
+READ_TIMEOUT_S = 8.0
 CONNECT_TIMEOUT_S = 5.0
+BACKOFF_S = 0.5
+MIN_ATTEMPT_S = 1.0
+"""A retry is made only when this much of the deadline is left after the pause."""
 MAX_REDIRECTS = 3
 MAX_URL = 4096
 USER_AGENT = "horae-plugin-calendar"
@@ -125,7 +131,10 @@ class HttpFetcher:
         *,
         max_bytes: int = MAX_BYTES,
         timeout_s: float = TIMEOUT_S,
+        attempt_timeout_s: float = ATTEMPT_TIMEOUT_S,
+        read_timeout_s: float = READ_TIMEOUT_S,
         connect_timeout_s: float = CONNECT_TIMEOUT_S,
+        backoff_s: float = BACKOFF_S,
         max_redirects: int = MAX_REDIRECTS,
         attempts: int = 2,
         verify: ssl.SSLContext | bool = True,
@@ -133,7 +142,10 @@ class HttpFetcher:
     ) -> None:
         self.max_bytes = max_bytes
         self.timeout_s = timeout_s
+        self.attempt_timeout_s = attempt_timeout_s
+        self.read_timeout_s = read_timeout_s
         self.connect_timeout_s = connect_timeout_s
+        self.backoff_s = backoff_s
         self.max_redirects = max_redirects
         self.attempts = attempts
         self.verify = verify
@@ -142,7 +154,10 @@ class HttpFetcher:
     async def fetch(self, url: str) -> bytes:
         target = _split(url, schemes=self.schemes)
         deadline = time.monotonic() + self.timeout_s
-        timeout = httpx.Timeout(self.timeout_s, connect=min(self.connect_timeout_s, self.timeout_s))
+        timeout = httpx.Timeout(
+            min(self.read_timeout_s, self.timeout_s),
+            connect=min(self.connect_timeout_s, self.timeout_s),
+        )
         try:
             async with (
                 asyncio.timeout(self.timeout_s),
@@ -155,14 +170,16 @@ class HttpFetcher:
                 ) as client,
             ):
                 for attempt in range(1, self.attempts + 1):
-                    try:
-                        return await self._get(client, target)
-                    except FetchError as error:
-                        retry = error.reason in _RETRY_REASONS or error.reason in {
-                            f"http_{status}" for status in _RETRY_STATUS
-                        }
-                        if not retry or attempt == self.attempts or time.monotonic() > deadline:
-                            raise
+                    error = await self._attempt(client, target, deadline)
+                    if isinstance(error, bytes):
+                        return error
+                    retry = error.reason in _RETRY_REASONS or error.reason in {
+                        f"http_{status}" for status in _RETRY_STATUS
+                    }
+                    left = deadline - time.monotonic() - self.backoff_s
+                    if not retry or attempt == self.attempts or left < MIN_ATTEMPT_S:
+                        raise error
+                    await asyncio.sleep(self.backoff_s)
         except FetchError:
             raise
         except TimeoutError:
@@ -170,6 +187,19 @@ class HttpFetcher:
         except Exception:
             raise FetchError("transport_failed") from None
         raise FetchError("transport_failed")  # pragma: no cover (attempts >= 1)
+
+    async def _attempt(
+        self, client: httpx.AsyncClient, target: "_Parts", deadline: float
+    ) -> "bytes | FetchError":
+        """One attempt within its own budget: the body, or why it failed."""
+        budget = min(self.attempt_timeout_s, deadline - time.monotonic())
+        try:
+            async with asyncio.timeout(budget):
+                return await self._get(client, target)
+        except FetchError as error:
+            return error
+        except TimeoutError:
+            return FetchError("timeout")
 
     async def _get(self, client: httpx.AsyncClient, target: _Parts) -> bytes:
         current = target

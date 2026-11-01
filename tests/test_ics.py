@@ -1,11 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """Recurrence expansion over a window, one synthetic fixture per case (issue #2)."""
 
+import dataclasses
+import datetime as dt
+import time
+from collections.abc import Iterator
+
 import pytest
 
 from conftest import feed, window
+from horae_calendar import ics
 from horae_calendar.events import Event
-from horae_calendar.ics import MAX_OCCURRENCES, IcsError, expand
+from horae_calendar.ics import MAX_PER_FEED, MAX_PER_SERIES, IcsError, expand
 
 
 def times(name: str, start: str, days: int, tz: str = "Europe/Paris") -> list[tuple[str, ...]]:
@@ -167,14 +173,15 @@ def test_a_non_recurring_event_id_has_no_instance() -> None:
     assert holiday.id == intents.fingerprint("calendar", "holiday-1@example.org")
 
 
-def test_hostile_text_is_plain_single_line_and_capped() -> None:
+def test_hostile_text_is_plain_and_capped() -> None:
     found = events("hostile", "2026-10-23", 1, "UTC")
     hostile, empty, no_title = found
     assert hostile.title.startswith("Pay 📅 2020-01-01 🔁 every day #tag [[Secret note]]")
-    for text in (hostile.title, hostile.location or "", hostile.description or ""):
+    for text in (hostile.title, hostile.location or ""):
         assert not any(ch in text for ch in "\n\r\x07\x1b\u202e\u200b")
+    assert not any(ch in (hostile.description or "") for ch in "\r\x07\x1b\u202e\u200b")
     assert hostile.location == "[click](https://evil.example.org) 📅 2020-01-01"
-    assert hostile.description == "line one line two 🔺 [[x]] [31mred"
+    assert hostile.description == "line one\nline two 🔺 [[x]] [31mred"
     assert empty.title == "(untitled)"
     assert no_title.title == "(untitled)"
     assert no_title.id.startswith("calendar:--uid-----2020-01-01::")
@@ -221,7 +228,8 @@ def test_malformed_events_are_skipped_not_fatal() -> None:
     )
     result = expand(data, "Cal", window("2026-10-23", 1, "UTC"))
     assert [e.title for e in result.events] == ["Good"]
-    assert result.skipped >= 2
+    assert result.skipped == 3
+    assert not result.complete
 
 
 def test_secondly_and_minutely_rules_are_skipped() -> None:
@@ -236,12 +244,261 @@ def test_secondly_and_minutely_rules_are_skipped() -> None:
     assert len(result.events) == 6  # 30 hours from 22 Oct 00:00: 23 Oct 00:00 to 05:00
 
 
-def test_too_many_occurrences_fail_the_feed() -> None:
+def test_a_series_is_truncated_not_the_feed() -> None:
+    """A half-hourly series over 62 days (2976 instances) keeps its earliest 500, and the
+    other series of the feed are all there."""
     rule = "RRULE:FREQ=HOURLY;BYMINUTE=0,30"
-    data = calendar(f"UID:h\nDTSTART:20261001T000000Z\n{rule}\nSUMMARY:Half-hourly")
-    assert MAX_OCCURRENCES < 62 * 48
-    with pytest.raises(IcsError, match="too_many_events"):
-        expand(data, "Cal", window("2026-10-01", 62, "UTC"))
+    data = calendar(
+        f"UID:h\nDTSTART:20261001T000000Z\n{rule}\nSUMMARY:Half-hourly",
+        "UID:o\nDTSTART:20261130T120000Z\nSUMMARY:Once",
+    )
+    w = window("2026-10-01", 62, "UTC")
+    result = expand(data, "Cal", w)
+    half = [e for e in result.events if e.title == "Half-hourly"]
+    assert len(half) == MAX_PER_SERIES
+    assert half[0].to_json()["start"] == "2026-10-01T00:00:00+00:00"
+    assert half[-1].to_json()["start"] == "2026-10-11T09:30:00+00:00"
+    assert [e.title for e in result.events if e.title == "Once"] == ["Once"]
+    assert (result.truncated, result.skipped, result.complete) == (1, 0, False)
+
+
+def test_a_feed_is_truncated_at_its_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ics, "MAX_PER_FEED", 3)
+    data = calendar(*(f"UID:e{n}\nDTSTART:2026102{n}T090000Z\nSUMMARY:E{n}" for n in range(1, 7)))
+    result = expand(data, "Cal", window("2026-10-20", 10, "UTC"))
+    assert [e.title for e in result.events] == ["E1", "E2", "E3"]  # the earliest
+    assert result.truncated == 3
+    assert not result.complete
+    assert MAX_PER_FEED == 2000
+
+
+def test_cancelled_instances_do_not_count_toward_the_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ics, "MAX_PER_SERIES", 3)
+    data = calendar(
+        "UID:d\nDTSTART:20261020T090000Z\nRRULE:FREQ=DAILY;COUNT=6\nSUMMARY:D",
+        *(
+            f"UID:d\nRECURRENCE-ID:2026102{n}T090000Z\nDTSTART:2026102{n}T090000Z\n"
+            "STATUS:CANCELLED\nSUMMARY:D"
+            for n in (0, 1, 2)
+        ),
+    )
+    result = expand(data, "Cal", window("2026-10-20", 6, "UTC"))
+    assert [e.start.day for e in result.events] == [23, 24, 25]
+    assert result.complete
+
+
+def test_margin_days_do_not_count_toward_the_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The day before and after the window is expanded, but only what meets the window
+    counts."""
+    monkeypatch.setattr(ics, "MAX_PER_SERIES", 2)
+    data = calendar("UID:d\nDTSTART:20261001T090000Z\nRRULE:FREQ=DAILY\nSUMMARY:D")
+    result = expand(data, "Cal", window("2026-10-20", 2, "UTC"))
+    assert len(result.events) == 2
+    assert result.complete
+
+
+def test_rules_that_never_reach_the_window_are_skipped_in_time() -> None:
+    """A rule that never matches would make dateutil step to the year 9999: twenty of them
+    are skipped (counted), well within the feed's time budget."""
+    impossible = "RRULE:FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30"
+    data = calendar(
+        *(f"UID:i{n}\nDTSTART:19710101T090000Z\n{impossible}\nSUMMARY:Never" for n in range(20)),
+        "UID:ok\nDTSTART:20261023T090000Z\nSUMMARY:Real",
+    )
+    started = time.monotonic()
+    result = expand(data, "Cal", window("2026-10-23", 1, "UTC"))
+    assert time.monotonic() - started < ics.BUDGET_S
+    assert [e.title for e in result.events] == ["Real"]
+    assert result.skipped == 20
+    assert result.truncated == 0
+    assert not result.complete
+
+
+def test_a_far_dtstart_within_the_step_budget_is_expanded() -> None:
+    data = calendar("UID:old\nDTSTART:19710101T090000Z\nRRULE:FREQ=DAILY\nSUMMARY:Old daily")
+    result = expand(data, "Cal", window("2026-10-23", 1, "UTC"))
+    assert [e.title for e in result.events] == ["Old daily"]
+    assert result.complete
+
+
+def test_the_time_budget_stops_the_feed() -> None:
+    """Out of time: the series not yet expanded are counted in `truncated`."""
+    ticks = iter(range(1000))
+    data = calendar(*(f"UID:e{n}\nDTSTART:20261023T0{n}0000Z\nSUMMARY:E{n}" for n in range(5)))
+    result = expand(
+        data, "Cal", window("2026-10-23", 1, "UTC"), budget_s=2.5, clock=lambda: next(ticks)
+    )
+    # the clock gives 0 (start), then 1, 2 for two series, then 3 > 2.5: three left
+    assert len(result.events) == 2
+    assert result.truncated == 3
+    assert not result.complete
+
+
+def test_the_time_budget_stops_a_costly_rule() -> None:
+    impossible = "RRULE:FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30"
+    data = calendar(f"UID:i\nDTSTART:19710101T090000Z\n{impossible}\nSUMMARY:Never")
+    result = expand(data, "Cal", window("2026-10-23", 1, "UTC"), budget_s=0.0)
+    assert result.events == []
+    assert result.truncated == 1
+
+
+def test_the_rule_guard_is_installed() -> None:
+    assert ics.GUARDED
+
+
+def test_this_and_future_instances_keep_their_own_ids() -> None:
+    """The reviewer's case: every instance after a THISANDFUTURE override has an id from
+    its own original start, and all of them are returned."""
+    data = calendar(
+        "UID:t\nDTSTART:20261020T090000Z\nDTEND:20261020T100000Z\nRRULE:FREQ=DAILY;COUNT=40\n"
+        "SUMMARY:Old",
+        "UID:t\nRECURRENCE-ID;RANGE=THISANDFUTURE:20261029T090000Z\nDTSTART:20261029T100000Z\n"
+        "DTEND:20261029T110000Z\nSUMMARY:New",
+    )
+    w = window("2026-10-26", 7, "UTC")
+    found = sorted(expand(data, "Cal", w).events, key=lambda e: e.sort_key(w))
+    assert [e.start.day for e in found] == [26, 27, 28, 29, 30, 31, 1]
+    assert len({e.id for e in found}) == 7
+    assert [e.id.split(":")[2] for e in found[3:]] == [
+        "20261029T090000Z", "20261030T090000Z", "20261031T090000Z", "20261101T090000Z",
+    ]  # fmt: skip
+    assert [e.title for e in found] == ["Old"] * 3 + ["New"] * 4
+
+
+def test_this_and_future_through_the_tool_returns_every_day() -> None:
+    import anyio
+    from horae_sdk.testing import call
+
+    from conftest import NOW, FakeFetcher, url
+    from horae_calendar import build
+
+    data = (
+        b"BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//t//EN\nBEGIN:VEVENT\nUID:t\n"
+        b"DTSTAMP:20260101T000000Z\nDTSTART;TZID=Europe/Paris:20261020T090000\n"
+        b"RRULE:FREQ=DAILY;COUNT=40\nSUMMARY:Daily\nEND:VEVENT\nBEGIN:VEVENT\nUID:t\n"
+        b"DTSTAMP:20260101T000000Z\n"
+        b"RECURRENCE-ID;RANGE=THISANDFUTURE;TZID=Europe/Paris:20261029T090000\n"
+        b"DTSTART;TZID=Europe/Paris:20261029T100000\nSUMMARY:Later\nEND:VEVENT\n"
+        b"END:VCALENDAR\n"
+    )
+    plugin = build(
+        FakeFetcher({url("t"): data}), environ={"CALENDAR_ICS_URLS": url("t")}, clock=lambda: NOW
+    )
+    params = {"start": "2026-10-26", "days": 7, "timezone": "Europe/Paris"}
+    replayed = anyio.run(call, plugin, "calendar.events", params)
+    assert replayed.error is None
+    starts = [e["start"][:10] for e in replayed.data["events"]]
+    assert starts == [f"2026-10-{d}" for d in (26, 27, 28, 29, 30, 31)] + ["2026-11-01"]
+    assert len({e["id"] for e in replayed.data["events"]}) == 7
+
+
+def test_unknown_tzid_is_floating_with_a_warning() -> None:
+    result = expand(feed("unknown-tzid"), "Cal", window("2026-10-26", 1))
+    assert [(e.title, e.to_json()["start"]) for e in result.events] == [
+        ("Unknown zone", "2026-10-26T09:00:00+01:00"),
+        ("Known zone", "2026-10-26T10:00:00+01:00"),
+    ]
+    assert result.warnings == 1
+    assert result.complete
+
+
+def test_a_date_until_on_a_timed_series_includes_that_day() -> None:
+    """UNTIL=20261028 on a 23:30 Paris series: the 28th at 23:30 is in (it is 22:30 UTC,
+    after midnight UTC, which the library would have used)."""
+    data = calendar(
+        "UID:u\nDTSTART;TZID=Europe/Paris:20261026T233000\nRRULE:FREQ=DAILY;UNTIL=20261028\n"
+        "SUMMARY:Late",
+        "UID:f\nDTSTART:20261026T233000\nRRULE:FREQ=DAILY;UNTIL=20261027\nSUMMARY:Floating",
+    )
+    found = expand(data, "Cal", window("2026-10-26", 5)).events
+    late = sorted(e.to_json()["start"] for e in found if e.title == "Late")
+    assert late == [f"2026-10-{d}T23:30:00+01:00" for d in (26, 27, 28)]
+    assert sorted(e.start.day for e in found if e.title == "Floating") == [26, 27]
+
+
+def test_an_event_ending_at_the_window_start_is_out() -> None:
+    data = calendar(
+        "UID:e\nDTSTART;TZID=Europe/Paris:20261022T230000\nDTEND;TZID=Europe/Paris:20261023T000000\n"
+        "SUMMARY:Ends at midnight",
+        "UID:s\nDTSTART;TZID=Europe/Paris:20261022T230000\nDTEND;TZID=Europe/Paris:20261023T000001\n"
+        "SUMMARY:Ends a second later",
+    )
+    found = expand(data, "Cal", window("2026-10-23", 1)).events
+    assert [e.title for e in found] == ["Ends a second later"]
+
+
+def test_a_uidless_series_is_recurring_with_stable_ids() -> None:
+    data = calendar("DTSTART:20261023T090000Z\nRRULE:FREQ=DAILY;COUNT=3\nSUMMARY:No UID")
+    w = window("2026-10-23", 3, "UTC")
+    found = expand(data, "Cal", w).events
+    assert len(found) == 3
+    assert all(e.recurring for e in found)
+    uids = {e.id.split(":")[1] for e in found}
+    assert len(uids) == 1
+    assert next(iter(uids)).startswith("no-uid-")
+    assert len({e.id for e in found}) == 3
+    # a re-export (new DTSTAMP, SEQUENCE, LAST-MODIFIED) keeps the ids
+    again = data.replace(b"DTSTAMP:20260101T000000Z", b"DTSTAMP:20261101T000000Z\nSEQUENCE:4")
+    assert {e.id for e in expand(again, "Cal", w).events} == {e.id for e in found}
+
+
+def test_uidless_twins_are_one_event() -> None:
+    twin = "DTSTART:20261023T090000Z\nSUMMARY:Twin"
+    found = expand(calendar(twin, twin), "Cal", window("2026-10-23", 1, "UTC")).events
+    assert [e.title for e in found] == ["Twin"]
+    assert not found[0].recurring
+
+
+def test_a_uidless_event_does_not_make_none_recurring() -> None:
+    data = calendar(
+        "DTSTART:20261023T090000Z\nRRULE:FREQ=DAILY;COUNT=2\nSUMMARY:Rule",
+        "UID:None\nDTSTART:20261023T100000Z\nSUMMARY:Called None",
+    )
+    found = expand(data, "Cal", window("2026-10-23", 1, "UTC")).events
+    (named,) = [e for e in found if e.title == "Called None"]
+    assert not named.recurring
+
+
+def test_a_broken_instance_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    real = ics._event
+
+    def flaky(occurrence: object, feed: object) -> object:
+        event = real(occurrence, feed)  # type: ignore[arg-type]
+        if event is not None and event.start.day == 24:
+            raise ValueError("broken")
+        return event
+
+    monkeypatch.setattr(ics, "_event", flaky)
+    data = calendar("UID:d\nDTSTART:20261023T090000Z\nRRULE:FREQ=DAILY;COUNT=3\nSUMMARY:D")
+    result = expand(data, "Cal", window("2026-10-23", 3, "UTC"))
+    assert [e.start.day for e in result.events] == [23, 25]
+    assert result.skipped == 1
+    assert not result.complete
+
+
+def test_a_series_failing_while_expanding_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(series: object, lower: object, upper: object) -> Iterator[object]:
+        if getattr(series, "uid", "") == "bad":
+            raise ValueError("broken")
+        yield from real(series, lower, upper)
+
+    real = ics._occurrences
+    monkeypatch.setattr(ics, "_occurrences", broken)
+    data = calendar(
+        "UID:bad\nDTSTART:20261023T090000Z\nSUMMARY:Bad",
+        "UID:good\nDTSTART:20261023T100000Z\nSUMMARY:Good",
+    )
+    result = expand(data, "Cal", window("2026-10-23", 1, "UTC"))
+    assert [e.title for e in result.events] == ["Good"]
+    assert result.skipped == 1
+
+
+def test_a_series_generating_too_much_is_cut(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ics, "MAX_GENERATED", 5)
+    data = calendar("UID:d\nDTSTART:20261020T090000Z\nRRULE:FREQ=DAILY\nSUMMARY:D")
+    result = expand(data, "Cal", window("2026-10-21", 10, "UTC"))
+    assert len(result.events) == 4  # the margin day before the window was generated too
+    assert result.truncated == 1
 
 
 def test_rdate_adds_instances() -> None:
@@ -293,3 +550,40 @@ def test_x_wr_timezone_applies_to_floating_times() -> None:
         ("Floating", "2026-10-23T15:00:00+02:00"),
         ("UTC", "2026-10-23T15:00:00+02:00"),
     ]
+
+
+def test_ids_stay_unique_within_a_feed() -> None:
+    """Equal events under one id are one; a different event under a taken id gets an id
+    with its start added (a library quirk, never a valid feed)."""
+    w = window("2026-10-23", 1, "UTC")
+    first = expand(calendar("UID:a\nDTSTART:20261023T090000Z\nSUMMARY:A"), "Cal", w).events[0]
+    other = dataclasses.replace(first, title="B", start=first.start + dt.timedelta(hours=1))
+    found: dict[str, tuple[Event, int]] = {}
+    for event in (first, first, other, other):
+        ics._keep_unique(found, event, 0)
+    assert [event.title for event, _index in found.values()] == ["A", "B"]
+    assert len(found) == 2
+
+
+def test_the_deadline_also_stops_a_rule_mid_iteration() -> None:
+    """The clock is read inside dateutil's iterator too, so one costly rule cannot outlast
+    the budget."""
+    readings = iter([0.0, 0.0])  # the start, the check before the series; then late
+    impossible = "RRULE:FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30"
+    data = calendar(f"UID:i\nDTSTART:19710101T090000Z\n{impossible}\nSUMMARY:Never")
+    result = expand(
+        data,
+        "Cal",
+        window("2026-10-23", 1, "UTC"),
+        budget_s=1.0,
+        clock=lambda: next(readings, 99.0),
+    )
+    assert result.truncated == 1
+    assert result.skipped == 0
+
+
+def test_too_many_components(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ics, "MAX_COMPONENTS", 2)
+    data = calendar(*(f"UID:e{n}\nDTSTART:20261023T090000Z" for n in range(3)))
+    with pytest.raises(IcsError, match="too_many_events"):
+        expand(data, "Cal", window("2026-10-23", 1, "UTC"))

@@ -9,11 +9,16 @@ RECURRENCE-ID per instance, DATE or DATE-TIME values), so `event_id`, `instance_
 `Window` apply to them as they are.
 
 **Untrusted text.** Titles, locations and descriptions come from whoever can put an event in
-the calendar (an invitation is enough), so they are data. `clean_text` keeps them as **plain
-text** made safe for any display: line breaks, control and format characters (bidi,
-zero-width) removed and the length capped, with the SDK's `escape_title` / `plain_text` pair.
-It does not escape Markdown or Obsidian Tasks syntax, because that depends on the target: a
-task title built from an event goes through `intents.task_create`, which escapes it.
+the calendar (an invitation is enough), so they are data. `clean_line` and `clean_text` keep
+them as **plain text**, character for character: control and format characters (bidi
+overrides, zero-width spaces) are dropped, except the zero-width joiner and non-joiner that
+some scripts and emoji need; a title or location is one line (any run of whitespace, line
+breaks included, becomes one space); a description keeps its line breaks as `\n` (at most
+`MAX_DESCRIPTION_LINES` lines, blank runs collapsed). The length cap counts the characters of
+that text. Nothing is escaped, unescaped or resolved: `&#x1F4C5;` stays those nine
+characters, Markdown and Obsidian Tasks syntax stay as written. Escaping depends on the
+target, so it is the consumer's job: a task title built from an event goes through
+`intents.task_create`, which escapes it, and a note writer escapes what it writes.
 
 **Times.** A timed event's `start` and `end` are RFC 3339 date-times with seconds and the
 offset of the window's time zone (`2026-10-26T09:30:00+01:00`), the form the core's
@@ -33,15 +38,16 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from horae_sdk import intents
-from horae_sdk.tasks import escape_title, plain_text
 
 NAMESPACE = "calendar"
 """The first part of every event id (the plugin's name, by the template's convention)."""
 MAX_TITLE = 300
 MAX_LOCATION = 300
 MAX_DESCRIPTION = 1000
+MAX_DESCRIPTION_LINES = 50
 MAX_DAYS = 62
-_LINE_BREAKS = re.compile("[\\r\\n\\x85\\u2028\\u2029\\v\\f]+")
+_LINE_BREAKS = re.compile(r"\r\n|[\r\n\x85\u2028\u2029\v\f\x1c-\x1e]")
+_JOINERS = frozenset("\u200c\u200d")  # zero-width non-joiner and joiner
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 Status = Literal["confirmed", "tentative"]
@@ -51,16 +57,45 @@ class WindowError(ValueError):
     """A window parameter that cannot be used (its message names the parameter, not data)."""
 
 
-def clean_text(raw: object, max_length: int) -> str | None:
-    """`raw` as plain, single-line text of at most `max_length` characters; `None` when
-    nothing printable is left (or `raw` is not a string)."""
+def clean_line(raw: object, max_length: int) -> str | None:
+    """`raw` as one line of plain text of at most `max_length` characters (a title, a
+    location); `None` when nothing visible is left (or `raw` is not a string)."""
     if not isinstance(raw, str):
         return None
-    flat = _LINE_BREAKS.sub(" ", raw)
-    if not any(_printable(char) for char in flat):
+    return _cut(_line(raw), max_length)
+
+
+def clean_text(raw: object, max_length: int) -> str | None:
+    """`raw` as plain text of at most `max_length` characters and `MAX_DESCRIPTION_LINES`
+    lines, its line breaks kept as `\\n` (a description); `None` when nothing visible is left
+    (or `raw` is not a string)."""
+    if not isinstance(raw, str):
         return None
-    text = plain_text(escape_title(flat, max_length=max_length)).strip()
-    return text[:max_length] or None
+    lines: list[str] = []
+    for part in _LINE_BREAKS.split(raw):
+        line = _line(part)
+        if line or (lines and lines[-1]):  # one blank line at most between two lines
+            lines.append(line)
+        if len(lines) > MAX_DESCRIPTION_LINES:
+            break
+    return _cut("\n".join(lines[:MAX_DESCRIPTION_LINES]), max_length)
+
+
+def _line(raw: str) -> str:
+    """`raw` without control or format characters, its whitespace runs made one space."""
+    return " ".join("".join(char for char in raw if char.isspace() or _kept(char)).split())
+
+
+def _kept(char: str) -> bool:
+    category = unicodedata.category(char)
+    if category == "Cf":
+        return char in _JOINERS
+    return category not in ("Cc", "Cs")
+
+
+def _cut(text: str, max_length: int) -> str | None:
+    text = text[:max_length].strip()
+    return text if any(_printable(char) for char in text) else None
 
 
 def _printable(char: str) -> bool:

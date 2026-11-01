@@ -12,9 +12,12 @@ from hypothesis import strategies as st
 
 from conftest import NOW, feed, window
 from horae_calendar.events import (
+    MAX_DESCRIPTION,
+    MAX_DESCRIPTION_LINES,
     MAX_TITLE,
     Window,
     WindowError,
+    clean_line,
     clean_text,
     event_id,
     instance_key,
@@ -81,34 +84,85 @@ def test_event_ids_use_the_sdk_fingerprint() -> None:
     ("raw", "expected"),
     [
         ("Team standup", "Team standup"),
-        ("  two\r\nlines\u2028here ", "two lines here"),
+        ("  two\r\nlines\u2028here\tand  there ", "two lines here and there"),
         ("bidi\u202eand\u200bzero width\x07", "bidiandzero width"),
         ("[[link]] #tag 📅 2020-01-01", "[[link]] #tag 📅 2020-01-01"),
+        ("Pay &#x1F4C5; 2020-01-01", "Pay &#x1F4C5; 2020-01-01"),
+        (
+            "**bold** _it_ `code` <b>x</b> \\[x\\] &amp;",
+            "**bold** _it_ `code` <b>x</b> \\[x\\] &amp;",
+        ),
+        ("👩\u200d💻 dev, \u0915\u094d\u200c\u0937", "👩\u200d💻 dev, \u0915\u094d\u200c\u0937"),
         ("", None),
         ("\u200b\n\t", None),
+        ("\u200d", None),
         (None, None),
         (42, None),
     ],
 )
-def test_clean_text(raw: object, expected: str | None) -> None:
+def test_clean_line(raw: object, expected: str | None) -> None:
+    assert clean_line(raw, 100) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("one\r\ntwo\rthree\u2028four", "one\ntwo\nthree\nfour"),
+        ("\n\n  a  \t b \n\n\n\nc\n\n", "a b\n\nc"),
+        ("x\x1b[31mred\u202e\x00", "x[31mred"),
+        ("- [ ] task 📅 2020-01-01\n# heading", "- [ ] task 📅 2020-01-01\n# heading"),
+        ("\n\u200b\n", None),
+    ],
+)
+def test_clean_text_keeps_line_breaks(raw: str, expected: str | None) -> None:
     assert clean_text(raw, 100) == expected
 
 
-def test_clean_text_caps_the_length() -> None:
-    text = clean_text("x" * 5000, MAX_TITLE)
+def test_clean_text_bounds_the_lines() -> None:
+    text = clean_text("\n".join(f"line {n}" for n in range(200)), 10_000)
     assert text is not None
-    assert len(text) <= MAX_TITLE
+    assert text.split("\n") == [f"line {n}" for n in range(MAX_DESCRIPTION_LINES)]
+
+
+def test_the_caps_count_the_raw_characters() -> None:
+    """Nothing is escaped first, so `&` and `[` count one character each."""
+    assert clean_line("&[" * 400, MAX_TITLE) == ("&[" * 400)[:MAX_TITLE]
+    assert clean_text("&" * 1500, MAX_DESCRIPTION) == "&" * MAX_DESCRIPTION
+    assert clean_line("x" * 5000, MAX_TITLE) == "x" * MAX_TITLE
+
+
+ALLOWED_FORMAT = {"\u200c", "\u200d"}
+
+
+def assert_safe(text: str, max_length: int, *, line_breaks: bool) -> None:
+    assert len(text) <= max_length
+    assert text == text.strip()
+    assert "\r" not in text
+    if not line_breaks:
+        assert "\n" not in text
+        assert "  " not in text
+    for char in text:
+        category = unicodedata.category(char)
+        if char == "\n":
+            continue
+        assert category not in {"Cc", "Cs", "Zl", "Zp"}, repr(char)
+        assert category != "Cf" or char in ALLOWED_FORMAT, repr(char)
+
+
+@given(st.text(max_size=2000))
+def test_clean_line_is_always_safe(raw: str) -> None:
+    text = clean_line(raw, 200)
+    if text is not None:
+        assert_safe(text, 200, line_breaks=False)
 
 
 @given(st.text(max_size=2000))
 def test_clean_text_is_always_safe(raw: str) -> None:
-    text = clean_text(raw, 200)
-    if text is None:
-        return
-    assert len(text) <= 200
-    assert text == text.strip()
-    for char in text:
-        assert unicodedata.category(char) not in {"Cc", "Cf", "Zl", "Zp"}, repr(char)
+    text = clean_text(raw, 500)
+    if text is not None:
+        assert_safe(text, 500, line_breaks=True)
+        assert text.count("\n") < MAX_DESCRIPTION_LINES
+        assert "\n\n\n" not in text
 
 
 def ics_with_summary(summary: str) -> bytes:
@@ -129,7 +183,7 @@ def ics_with_summary(summary: str) -> bytes:
 @given(st.text(max_size=300))
 def test_any_summary_becomes_a_safe_title(summary: str) -> None:
     (event,) = expand(ics_with_summary(summary), "Cal", window("2026-10-23", 1, "UTC")).events
-    assert event.title == (clean_text(summary, MAX_TITLE) or "(untitled)")
+    assert event.title == (clean_line(summary, MAX_TITLE) or "(untitled)")
     assert FINGERPRINT.fullmatch(event.id)
 
 

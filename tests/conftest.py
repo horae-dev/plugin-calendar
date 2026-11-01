@@ -46,16 +46,19 @@ class FakeFetcher:
         return answer
 
 
-ENVIRON = {
-    "CALENDAR_ICS_URL": url("work"),
-    "CALENDAR_ICS_URL_FAMILY": url("family", "calendar.proton.me"),
-    "CALENDAR_ICS_URL_HOSTILE": url("hostile"),
-    "CALENDAR_ICS_URL_EMPTY": url("empty"),
-    "CALENDAR_ICS_URL_DOWN": url("down"),
-    "CALENDAR_ICS_URL_OTHER": f"https://ics.example.org/{TOKEN}/feed.ics",
-    "CALENDAR_ICS_URL_UNLISTED": f"https://unlisted.example.org/{TOKEN}/feed.ics",
-    "CALENDAR_ICS_URL_BROKEN": url("broken"),
-}
+URLS = [
+    url("work"),  # 1
+    url("family", "calendar.proton.me"),  # 2
+    url("hostile"),  # 3
+    url("empty"),  # 4
+    url("down"),  # 5
+    f"https://ics.example.org/{TOKEN}/feed.ics",  # 6: a host to allow
+    f"https://unlisted.example.org/{TOKEN}/feed.ics",  # 7: a host never allowed
+    url("broken"),  # 8
+]
+"""The feed URLs in `CALENDAR_ICS_URLS`, a calendar's `index` is its place (1-based)."""
+WORK, FAMILY, HOSTILE, EMPTY, DOWN, OTHER, UNLISTED, BROKEN = range(1, 9)
+ENVIRON = {"CALENDAR_ICS_URLS": " ".join(URLS) + "\n"}
 FEEDS: dict[str, bytes | str] = {
     url("work"): feed("weekly-exdate"),
     url("family", "calendar.proton.me"): feed("all-day"),

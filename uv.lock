@@ -436,6 +436,7 @@ dependencies = [
     { name = "horae-sdk" },
     { name = "httpx" },
     { name = "icalendar" },
+    { name = "python-dateutil" },
     { name = "recurring-ical-events" },
 ]
 
@@ -456,6 +457,7 @@ requires-dist = [
     { name = "horae-sdk", git = "https://github.com/horae-dev/horae?subdirectory=sdk&branch=main" },
     { name = "httpx", specifier = ">=0.28.1,<1" },
     { name = "icalendar", specifier = ">=7.3,<8" },
+    { name = "python-dateutil", specifier = ">=2.9,<3" },
     { name = "recurring-ical-events", specifier = ">=3.8.2,<4" },
 ]
 

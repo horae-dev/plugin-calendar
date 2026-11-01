@@ -66,6 +66,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send(302, headers={"Location": f"/{TOKEN}/ok.ics?again=1"})
         elif route == "other-host":
             self.send(302, headers={"Location": f"{self.scheme()}://localhost:{port}/ok.ics"})
+        elif route == "other-port":
+            self.send(302, headers={"Location": f"{self.scheme()}://127.0.0.1:{port + 1}/ok.ics"})
+        elif route == "slow-once.ics":
+            if Handler.hits[route] == 1:
+                time.sleep(1.0)
+            self.send(200, BODY)
         elif route == "other-scheme":
             self.send(301, headers={"Location": f"ftp://127.0.0.1:{port}/ok.ics"})
         elif route == "no-location":
@@ -196,7 +202,7 @@ def test_same_host_redirect_is_followed(http_base: str) -> None:
     assert fetch(fetcher(), f"{http_base}/same-host") == BODY
 
 
-@pytest.mark.parametrize("route", ["other-host", "other-scheme", "no-location"])
+@pytest.mark.parametrize("route", ["other-host", "other-port", "other-scheme", "no-location"])
 def test_other_redirects_are_refused(http_base: str, route: str) -> None:
     assert failure(fetcher(), f"{http_base}/{route}").reason == "redirect_refused"
 
@@ -220,6 +226,23 @@ def test_non_200(http_base: str, route: str, reason: str) -> None:
     Handler.hits.clear()
     assert failure(fetcher(), f"{http_base}/{route}").reason == reason
     assert Handler.hits[route] == 1  # a 4xx is never retried
+
+
+def test_a_retry_has_its_own_budget(http_base: str) -> None:
+    """The first attempt stops at its own budget, so the retry still has time left."""
+    Handler.hits.clear()
+    client = fetcher(timeout_s=3.0, attempt_timeout_s=0.3, backoff_s=0.05)
+    started = time.monotonic()
+    assert fetch(client, f"{http_base}/slow-once.ics") == BODY
+    assert Handler.hits["slow-once.ics"] == 2
+    assert time.monotonic() - started < 1.0
+
+
+def test_no_retry_without_enough_time_left(http_base: str) -> None:
+    Handler.hits.clear()
+    client = fetcher(timeout_s=1.2, attempt_timeout_s=0.3, backoff_s=0.05)
+    assert failure(client, f"{http_base}/slow-once.ics").reason == "timeout"
+    assert Handler.hits["slow-once.ics"] == 1  # 0.85 s left after the pause: under 1 s
 
 
 def test_one_retry_after_a_503(http_base: str) -> None:

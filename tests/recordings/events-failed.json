@@ -4,11 +4,11 @@
     "calendars": [
       {
         "name": "Work",
-        "secret": "CALENDAR_ICS_URL"
+        "index": 1
       },
       {
         "name": "Down",
-        "secret": "CALENDAR_ICS_URL_DOWN"
+        "index": 5
       }
     ],
     "start": "2026-10-22",

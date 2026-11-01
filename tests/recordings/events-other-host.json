@@ -4,13 +4,13 @@
     "calendars": [
       {
         "name": "Club",
-        "secret": "CALENDAR_ICS_URL_OTHER"
+        "index": 6
       }
     ],
     "start": "2026-10-21",
     "days": 5,
     "timezone": "Europe/Paris",
-    "extra_hosts": [
+    "allowed_hosts": [
       "ics.example.org"
     ]
   },
@@ -23,12 +23,16 @@
         "days": 5
       },
       "complete": true,
+      "truncated": 0,
       "calendars": [
         {
           "name": "Club",
           "ok": true,
+          "complete": true,
           "events": 5,
-          "skipped": 0
+          "skipped": 0,
+          "truncated": 0,
+          "warnings": 0
         }
       ],
       "events": [

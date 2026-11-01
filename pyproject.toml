@@ -1,7 +1,7 @@
 [project]
 name = "horae-plugin-calendar"
 version = "0.1.0"
-description = "The calendar Horae plugin: one source that proposes a task per message."
+description = "The calendar Horae plugin: calendar events from ICS feeds, recurrences expanded."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -10,6 +10,7 @@ dependencies = [
     "horae-sdk>=0.1,<0.2",
     "httpx>=0.28.1,<1",
     "icalendar>=7.3,<8",
+    "python-dateutil>=2.9,<3",
     "recurring-ical-events>=3.8.2,<4",
 ]
 
@@ -62,8 +63,8 @@ warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 
 [[tool.mypy.overrides]]
-# recurring-ical-events ships no type information.
-module = ["recurring_ical_events", "recurring_ical_events.*"]
+# recurring-ical-events and python-dateutil ship no type information.
+module = ["recurring_ical_events", "recurring_ical_events.*", "dateutil", "dateutil.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

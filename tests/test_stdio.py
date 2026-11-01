@@ -15,7 +15,7 @@ from horae_calendar import COMMAND, NAME
 
 # Derived from the plugin's code, so renaming the plugin needs no edit here.
 TOOL = f"{NAME}.events"
-CALENDARS = [{"name": "Personal", "secret": "CALENDAR_ICS_URL"}]
+CALENDARS = [{"name": "Personal", "index": 1}]
 
 
 async def serve_and_call() -> tuple[set[str], Replayed, Replayed]:
@@ -23,7 +23,7 @@ async def serve_and_call() -> tuple[set[str], Replayed, Replayed]:
     server = StdioServerParameters(
         command=sys.executable,
         args=COMMAND[1:],
-        env={"CALENDAR_ICS_URL": f"https://ics.example.org/{TOKEN}/basic.ics"},
+        env={"CALENDAR_ICS_URLS": f"https://ics.example.org/{TOKEN}/basic.ics\n"},
     )
     async with Client(server, read_timeout_seconds=30) as client:
         tools = {tool.name for tool in (await client.list_tools()).tools}

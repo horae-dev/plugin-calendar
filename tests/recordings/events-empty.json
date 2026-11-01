@@ -4,7 +4,7 @@
     "calendars": [
       {
         "name": "Empty",
-        "secret": "CALENDAR_ICS_URL_EMPTY"
+        "index": 4
       }
     ],
     "start": "2026-10-22",
@@ -20,12 +20,16 @@
         "days": 2
       },
       "complete": true,
+      "truncated": 0,
       "calendars": [
         {
           "name": "Empty",
           "ok": true,
+          "complete": true,
           "events": 0,
-          "skipped": 0
+          "skipped": 0,
+          "truncated": 0,
+          "warnings": 0
         }
       ],
       "events": []

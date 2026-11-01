@@ -3,7 +3,7 @@
 # interpreter that has this package (horae-sdk README, "The command").
 name: calendar
 version: 0.1.0
-horae: '>=0'
+horae: '>=0,<0.2'
 description: Calendar events from ICS feeds (Proton, Google), recurrences expanded.
 license: Apache-2.0
 provides:
@@ -14,7 +14,7 @@ permissions:
   - calendar.google.com
   - calendar.proton.me
   secrets:
-  - CALENDAR_ICS_URL
+  - CALENDAR_ICS_URLS
 runtime:
   protocol: mcp-stdio
   command:

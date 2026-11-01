@@ -4,7 +4,7 @@
     "calendars": [
       {
         "name": "Shared",
-        "secret": "CALENDAR_ICS_URL_HOSTILE"
+        "index": 3
       }
     ],
     "start": "2026-10-23",
@@ -20,12 +20,16 @@
         "days": 1
       },
       "complete": true,
+      "truncated": 0,
       "calendars": [
         {
           "name": "Shared",
           "ok": true,
+          "complete": true,
           "events": 3,
-          "skipped": 0
+          "skipped": 0,
+          "truncated": 0,
+          "warnings": 0
         }
       ],
       "events": [
@@ -37,7 +41,7 @@
           "end": "2026-10-23T10:00:00+00:00",
           "all_day": false,
           "location": "[click](https://evil.example.org) 📅 2020-01-01",
-          "description": "line one line two 🔺 [[x]] [31mred",
+          "description": "line one\nline two 🔺 [[x]] [31mred",
           "status": "confirmed",
           "recurring": false
         },

@@ -4,11 +4,11 @@
     "calendars": [
       {
         "name": "Work",
-        "secret": "CALENDAR_ICS_URL"
+        "index": 1
       },
       {
         "name": "Down",
-        "secret": "CALENDAR_ICS_URL_DOWN"
+        "index": 5
       }
     ],
     "start": "2026-10-22",
@@ -25,12 +25,16 @@
         "days": 2
       },
       "complete": false,
+      "truncated": 0,
       "calendars": [
         {
           "name": "Work",
           "ok": true,
+          "complete": true,
           "events": 1,
-          "skipped": 0
+          "skipped": 0,
+          "truncated": 0,
+          "warnings": 0
         },
         {
           "name": "Down",

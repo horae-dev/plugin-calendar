@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The plugin: one source, `calendar.events`, the events of a window from ICS feeds.
+"""The plugin: the source `calendar.events` (the events of a window from ICS feeds) and the
+`calendar.prep_tasks` transform (preparation tasks from those events, `horae_calendar.prep`).
 
 The core's plugin host starts this module as an MCP server over stdio (`python -m
-horae_calendar`). It is a **pure source**: it returns data and proposes no intent
-(preparation tasks are the `calendar.prep_tasks` transform, #5).
+horae_calendar`). The source is pure: it returns data and proposes no intent. Only the
+`calendar.prep_tasks` transform proposes intents (`task.create`).
 
 **Trusted and untrusted.** The tool's parameters come from the pipeline (trusted): which
 calendars, the window, the allowed hosts. The feeds' URLs are a **secret** (each carries an
@@ -35,6 +36,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from horae_sdk import Call, Output, Permissions, Plugin, PluginError
 
+from horae_calendar import prep
 from horae_calendar.events import Event, Window, WindowError
 from horae_calendar.fetch import Fetcher, FetchError, HttpFetcher, check_url
 from horae_calendar.ics import Expansion, IcsError, expand
@@ -51,8 +53,9 @@ HOSTS = ("calendar.google.com", "calendar.proton.me")
 Calendar's share links. Others are approved per instance (README, "Other hosts")."""
 SECRET = "CALENDAR_ICS_URLS"  # noqa: S105 (a secret's name, not its value)
 """The declared secret: every feed URL, separated by whitespace."""
-PERMISSIONS = Permissions(network=list(HOSTS), secrets=[SECRET])
-"""Declare the least you need: every network host, secret, path and intent type."""
+PERMISSIONS = Permissions(network=list(HOSTS), secrets=[SECRET], intents=["task.create"])
+"""Declare the least you need: every network host, secret, path and intent type. The only
+intent is `task.create`, which `calendar.prep_tasks` proposes (a task sink applies it)."""
 
 MAX_CALENDARS = 16
 MAX_EVENTS = 2000
@@ -125,6 +128,15 @@ def build(
             *(_calendar(client, urls[spec["index"] - 1], hosts, spec, window) for spec in specs)
         )
         return Output(_merge(specs, results, window, partial=partial))
+
+    @plugin.transform(prep.REF)
+    def prep_tasks(
+        call: Call, today: Any = None, rules: Any = None, max_tasks: Any = None
+    ) -> Output:
+        """`task.create` proposals for the events that match a rule (`horae_calendar.prep`).
+        No clock: `today` is the pipeline's `{{date}}`."""
+        data, proposed = prep.prep_tasks(call.params, call.input)
+        return Output(data, proposed)
 
     return plugin
 

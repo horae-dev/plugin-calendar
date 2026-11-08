@@ -188,6 +188,19 @@ def test_a_missing_secret(value: str | None) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("kind", "secret"), [("caldav", "CALENDAR_CALDAV"), ("google", "CALENDAR_GOOGLE")]
+)
+def test_a_missing_optional_secret_of_another_type(kind: str, secret: str) -> None:
+    """Only the ICS secret resolved: a calendar of another type is `secret_missing`."""
+    message = error(plugin_with(URLS), calendars=[{"name": "X", "type": kind, "index": 1}])
+    assert message == f"secret_missing: {secret} is not set or empty"
+
+
+def test_ics_only_needs_no_other_secret() -> None:
+    assert ok(plugin_with(URLS), calendars=[WORK])
+
+
 def test_an_index_out_of_range_is_config_invalid() -> None:
     message = error(plugin_with(URLS[:2]), calendars=[{"name": "Third", "index": 3}])
     assert message == (

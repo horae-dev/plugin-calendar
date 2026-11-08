@@ -70,10 +70,12 @@ GOOGLE_SECRET = "CALENDAR_GOOGLE"  # noqa: S105 (a secret's name, not its value)
 triples, separated by whitespace (`horae_calendar.google.accounts`)."""
 PERMISSIONS = Permissions(
     network=list(HOSTS),
-    secrets=[SECRET, CALDAV_SECRET, GOOGLE_SECRET],
+    optional_secrets=[SECRET, CALDAV_SECRET, GOOGLE_SECRET],
     intents=["task.create"],
 )
-"""Declare the least you need: every network host, secret, path and intent type. The only
+"""Declare the least you need: every network host, secret, path and intent type. All three
+secrets are optional (core decision 56): the host injects those that resolve, and a calendar
+of a type whose secret is missing fails with `secret_missing`. The only
 intent is `task.create`, which `calendar.prep_tasks` proposes (a task sink applies it)."""
 
 MAX_CALENDARS = 16

@@ -29,6 +29,7 @@ def test_plugin_yaml_passes_the_sdk_checks() -> None:
         intents=document["permissions"].get("intents", []),
         network=document["permissions"].get("network", []),
         secrets=document["permissions"].get("secrets", []),
+        optional_secrets=document["permissions"].get("optional_secrets", []),
         read=paths.get("read", []),
         write=paths.get("write", []),
     )
@@ -61,3 +62,13 @@ def test_main_prints_the_manifest(capsys: pytest.CaptureFixture[str]) -> None:
 def test_main_refuses_unknown_arguments() -> None:
     with pytest.raises(SystemExit, match="usage"):
         main(["--nope"])
+
+
+def test_every_secret_is_optional() -> None:
+    permissions = on_disk()["permissions"]
+    assert "secrets" not in permissions
+    assert permissions["optional_secrets"] == [
+        "CALENDAR_ICS_URLS",
+        "CALENDAR_CALDAV",
+        "CALENDAR_GOOGLE",
+    ]

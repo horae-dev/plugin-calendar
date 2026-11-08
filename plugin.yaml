@@ -18,7 +18,7 @@ permissions:
   - calendar.proton.me
   - oauth2.googleapis.com
   - www.googleapis.com
-  secrets:
+  optional_secrets:
   - CALENDAR_ICS_URLS
   - CALENDAR_CALDAV
   - CALENDAR_GOOGLE

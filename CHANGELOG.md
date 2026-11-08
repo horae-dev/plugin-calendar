@@ -5,14 +5,18 @@ must approve it.
 
 ## Unreleased
 
+- **Optional secrets** (core decision 56): `CALENDAR_ICS_URLS`, `CALENDAR_CALDAV` and
+  `CALENDAR_GOOGLE` move from `permissions.secrets` to `permissions.optional_secrets`; no
+  placeholder is needed for a calendar type you do not use, and a calendar of a type whose
+  secret is missing fails with `secret_missing`. **Requires a core with decision 56** (unreleased
+  0.0.x): the `horae:` range stays `>=0,<0.2`, but an older core rejects `optional_secrets`.
 - **Google Calendar API source** (#4): `calendars` entries with `type: google` (and an optional
   `calendar_id`, default `primary`) read `events.list` (`singleEvents`, window, paginated),
   authenticating with an OAuth refresh token exchanged for a short-lived access token on each
   call (in memory only). Failures are `auth_failed` (`invalid_grant`, 401 after a refresh),
   `rate_limited` and fixed codes. `python -m horae_calendar google-auth` runs the one-time
   consent locally and prints the secret. **New permissions:** network `www.googleapis.com` and
-  `oauth2.googleapis.com`; secret `CALENDAR_GOOGLE` (`client_id client_secret refresh_token`;
-  give it a placeholder when unused, secrets cannot be optional yet). Scope requested by the
+  `oauth2.googleapis.com`; secret `CALENDAR_GOOGLE` (`client_id client_secret refresh_token`). Scope requested by the
   helper: `calendar.events.readonly`.
 - Repository scaffolded from `template-plugin`.
 - **New tool `calendar.events`** (#2): the events of a window of whole days from ICS feeds

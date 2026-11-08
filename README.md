@@ -159,8 +159,7 @@ reason, never the URL, the feed's text or an upstream message:
 | `internal_error` | A bug; nothing else is reported. |
 
 A configuration error fails the whole call before any fetch, without the secret's
-content: `secret_missing: CALENDAR_ICS_URLS is not set or empty` (the host refuses to start
-the plugin when a declared secret cannot be resolved, so this means an empty value), and
+content: `secret_missing: CALENDAR_ICS_URLS is not set or empty` (the secret is optional, so this also means it is absent), and
 `config_invalid: ...` for a bad parameter, more than 16 URLs in the secret, or an `index`
 past its last URL (`calendars[0].index is 3 but CALENDAR_ICS_URLS holds 2 URL(s)`).
 
@@ -212,12 +211,11 @@ Apple ID and app-specific password never do). The password is sent only as HTTP 
 error (errors name the secret and counts only; an `Account` prints as `Account(<hidden>)`).
 At most 16 calendars.
 
-**The host starts a plugin only when every declared secret resolves.** `CALENDAR_CALDAV` is
-declared like `CALENDAR_ICS_URLS`, so an instance that uses only ICS feeds must still give it a
-value of at least 8 bytes, for example `not-in-use`; likewise an instance that uses only CalDAV
-must give `CALENDAR_ICS_URLS` one. A secret is read only when a calendar of its type is
-configured, so a placeholder is never parsed. (Secrets cannot be optional until the core
-supports it.)
+**Every secret is optional.** `CALENDAR_CALDAV` is declared like `CALENDAR_ICS_URLS` and
+`CALENDAR_GOOGLE` in `permissions.optional_secrets`: the host injects those that resolve, so an
+instance gives only the secrets of the calendar types it uses. A call that configures a
+calendar of a type whose secret is missing fails with `secret_missing`. This needs a core with
+optional secrets (decision 56, unreleased).
 
 ### Hosts and redirects
 
@@ -349,12 +347,8 @@ your copy.
 
 One more declared secret, **`CALENDAR_GOOGLE`**: for each Google account, three
 whitespace-separated words, `client_id client_secret refresh_token`, on one line (at most 16
-accounts; a calendar's `index` is the account's place). Like `CALENDAR_CALDAV`, it is
-**declared, so the host starts the plugin only when it resolves**: an instance that does not
-use Google must give it a placeholder of at least 8 bytes (for example `not-in-use`), and one
-that uses only Google must do the same for `CALENDAR_ICS_URLS` and `CALENDAR_CALDAV`
-(secrets cannot be optional until the core supports it). A secret is read only when a
-calendar of its type is configured, so a placeholder is never parsed.
+accounts; a calendar's `index` is the account's place). Like `CALENDAR_CALDAV`, it is an optional secret: an instance that does not use Google
+simply leaves it out.
 
 At each call the plugin exchanges the refresh token at `oauth2.googleapis.com/token` for an
 **access token (about an hour)**, used for every calendar of that account in the call and

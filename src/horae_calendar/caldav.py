@@ -19,6 +19,8 @@ resources, and the size of one `calendar-data`.
 """
 
 import datetime as dt
+import re
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from typing import Any, NoReturn
 from xml.parsers import expat
@@ -59,6 +61,20 @@ class Account:
 
     def __repr__(self) -> str:
         return "Account(<hidden>)"
+
+
+ICLOUD = "caldav.icloud.com"
+_SHARD = re.compile(r"p\d{1,3}-caldav\.icloud\.com")
+
+
+def shard_follow(account_host: str, allowed: Collection[str]) -> Callable[[str], bool]:
+    """Which other hosts a credentialed request to `account_host` may be redirected to: for
+    an iCloud account, a shard `pNN-caldav.icloud.com` that is also an allowed host (so the
+    one approved in `horae.lock`); for any other account, none (same origin only). The
+    global allow-list alone never lets credentials leave their host."""
+    if account_host != ICLOUD and not _SHARD.fullmatch(account_host):
+        return lambda host: False
+    return lambda host: _SHARD.fullmatch(host) is not None and host in allowed
 
 
 def accounts(secret: str, limit: int) -> list[Account] | None:

@@ -33,7 +33,7 @@ import base64
 import logging
 import ssl
 import time
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from typing import NamedTuple, Protocol
 from urllib.parse import urljoin, urlsplit, urlunsplit
@@ -79,10 +79,17 @@ class Reporter(Protocol):
     """Where the CalDAV answers come from (`HttpFetcher`; the tests give a fake one)."""
 
     async def report(
-        self, url: str, body: bytes, *, user: str, password: str, hosts: Collection[str]
+        self,
+        url: str,
+        body: bytes,
+        *,
+        user: str,
+        password: str,
+        follow: Callable[[str], bool] = lambda host: False,
     ) -> bytes:
         """The body of a CalDAV `REPORT` with HTTP Basic credentials, at an already checked
-        URL; a redirect is followed only to a host of `hosts` (`FetchError` otherwise)."""
+        URL; a redirect leaves the URL's origin only for a host `follow` accepts
+        (`FetchError` otherwise)."""
         ...
 
 
@@ -142,7 +149,7 @@ class _Request:
     body: bytes | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
     status: frozenset[int] = frozenset({200})
-    redirect_hosts: frozenset[str] = frozenset()
+    follow: Callable[[str], bool] = lambda host: False
     """Hosts a redirect may lead to besides the current origin (https, default port)."""
 
 
@@ -187,13 +194,20 @@ class HttpFetcher:
         return await self._run(url, _Request(), "text/calendar, */*;q=0.5")
 
     async def report(
-        self, url: str, body: bytes, *, user: str, password: str, hosts: Collection[str]
+        self,
+        url: str,
+        body: bytes,
+        *,
+        user: str,
+        password: str,
+        follow: Callable[[str], bool] = lambda host: False,
     ) -> bytes:
         """The body of a CalDAV `REPORT` (a 207 multistatus) sent with HTTP Basic
-        credentials. Because the credentials go with the request, a redirect (iCloud sends
-        `caldav.icloud.com` to a `pNN-caldav.icloud.com` shard) is followed only to a host
-        of `hosts` over `https` on the default port; the method, body and credentials go
-        with it. Same bounds as `fetch`; a 401 is `http_401`."""
+        credentials. Because the credentials go with the request, a redirect stays on the
+        same origin unless `follow(host)` accepts the other host (the caller binds it to the
+        account: iCloud's `pNN-caldav.icloud.com` shards, see `caldav.shard_follow`), always
+        over `https` on the default port; the method, body and credentials go with it. Same
+        bounds as `fetch`; a 401 is `http_401`."""
         request = _Request(
             method="REPORT",
             body=body,
@@ -203,7 +217,7 @@ class HttpFetcher:
                 "Depth": "1",
             },
             status=frozenset({207}),
-            redirect_hosts=frozenset(hosts),
+            follow=follow,
         )
         return await self._run(url, request, "application/xml, text/xml")
 
@@ -266,7 +280,7 @@ class HttpFetcher:
                 ) as response:
                     if response.status_code in _REDIRECTS:
                         current = self._redirect(
-                            current, response.headers.get("location"), request.redirect_hosts
+                            current, response.headers.get("location"), request.follow
                         )
                         continue
                     if response.status_code not in request.status:
@@ -284,7 +298,9 @@ class HttpFetcher:
                 raise FetchError("transport_failed") from None
         raise FetchError("too_many_redirects")
 
-    def _redirect(self, current: _Parts, location: str | None, hosts: Collection[str]) -> _Parts:
+    def _redirect(
+        self, current: _Parts, location: str | None, follow: Callable[[str], bool]
+    ) -> _Parts:
         if not location:
             raise FetchError("redirect_refused")
         try:
@@ -295,7 +311,7 @@ class HttpFetcher:
             return following
         # Another host: only an allowed one, over the same scheme and the default port.
         if (
-            following.hostname in hosts
+            follow(following.hostname)
             and following.scheme == current.scheme
             and following.origin()[2] == current.origin()[2]
         ):

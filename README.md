@@ -221,10 +221,12 @@ supports it.)
 
 `plugin.yaml` declares `caldav.icloud.com`. Any other CalDAV host (and every iCloud shard) goes
 through [Other hosts](#other-hosts): declare it, approve it in `horae.lock` and list it in the
-call's `allowed_hosts`. For a CalDAV request, a redirect is followed (at most 3, method, body
-and credentials kept) only to the same origin or **to another host that is allowed**, over
-`https` on the default port. The credentials therefore can never reach a host you did not
-approve, and a redirect to any other host fails with `redirect_refused`.
+call's `allowed_hosts`. A credentialed CalDAV request follows a redirect only to the **same origin**, with one
+exception: an account on `caldav.icloud.com` (or on a shard) may be redirected to a shard host
+matching `pNN-caldav.icloud.com` (`p` and 1 to 3 digits) **that is also in `allowed_hosts`**,
+over `https` on the default port (at most 3 hops; method, body and credentials kept). The
+global allow-list never widens this: a redirect from another account's host to any other host,
+even an allowed one, fails with `redirect_refused`.
 
 ### iCloud: manual check
 
@@ -238,7 +240,7 @@ directly; finding it takes a few `curl` calls (nothing here is stored by the plu
    not work, and the app password can be revoked there at any time.
 2. Find the principal (the answer holds `<current-user-principal>`, `/1234567890/principal/`):
    ```
-   curl -s -u 'me@icloud.com:abcd-efgh-ijkl-mnop' -X PROPFIND -H 'Depth: 0' \
+   curl -s -u "$ICLOUD_USER:$ICLOUD_APP_PASSWORD" -X PROPFIND -H 'Depth: 0' \
      -H 'Content-Type: application/xml' --data \
      '<propfind xmlns="DAV:"><prop><current-user-principal/></prop></propfind>' \
      https://caldav.icloud.com/
@@ -247,7 +249,7 @@ directly; finding it takes a few `curl` calls (nothing here is stored by the plu
    `https://p12-caldav.icloud.com:443/1234567890/calendars/`; **`p12-caldav.icloud.com` is
    your shard host**):
    ```
-   curl -s -u … -X PROPFIND -H 'Depth: 0' -H 'Content-Type: application/xml' --data \
+   curl -s -u "$ICLOUD_USER:$ICLOUD_APP_PASSWORD" -X PROPFIND -H 'Depth: 0' -H 'Content-Type: application/xml' --data \
      '<propfind xmlns="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><prop><c:calendar-home-set/></prop></propfind>' \
      https://caldav.icloud.com/1234567890/principal/
    ```

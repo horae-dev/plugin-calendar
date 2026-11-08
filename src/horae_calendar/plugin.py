@@ -32,6 +32,7 @@ import os
 import re
 from collections.abc import Callable, Mapping
 from typing import Any, Literal, NotRequired, TypedDict
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from horae_sdk import Call, Output, Permissions, Plugin, PluginError
@@ -259,12 +260,13 @@ async def _caldav(
     """The CalDAV calendar's events, or the reason it failed (a fixed code)."""
     try:
         url = check_url(account.url, hosts)
+        follow = caldav.shard_follow(urlsplit(url).hostname or "", hosts)
         answer = await client.report(
             url,
             caldav.query(window),
             user=account.user,
             password=account.password,
-            hosts=hosts,
+            follow=follow,
         )
         result = await asyncio.to_thread(_expand_caldav, answer, spec["name"], window)
     except (FetchError, IcsError, caldav.CalDavError) as error:

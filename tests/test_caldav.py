@@ -6,7 +6,7 @@ with `type: caldav` giving exactly what the ICS path gives. Never the network.""
 import asyncio
 import base64
 import threading
-from collections.abc import Collection, Iterator
+from collections.abc import Callable, Collection, Iterator
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -50,10 +50,16 @@ class FakeReporter(FakeFetcher):
         self.reports: list[dict[str, Any]] = []
 
     async def report(
-        self, url: str, body: bytes, *, user: str, password: str, hosts: Collection[str]
+        self,
+        url: str,
+        body: bytes,
+        *,
+        user: str,
+        password: str,
+        follow: Callable[[str], bool] = lambda host: False,
     ) -> bytes:
         self.reports.append(
-            {"url": url, "body": body, "user": user, "password": password, "hosts": set(hosts)}
+            {"url": url, "body": body, "user": user, "password": password, "follow": follow}
         )
         if isinstance(self.answer, str):
             raise FetchError(self.answer)
@@ -239,7 +245,9 @@ def test_tool_reads_caldav_and_sends_credentials_to_the_reporter() -> None:
     (report,) = reporter.reports
     assert report["url"] == COLLECTION
     assert (report["user"], report["password"]) == (USER, PASSWORD)
-    assert report["hosts"] == {"caldav.icloud.com", "calendar.google.com", "calendar.proton.me"}
+    follow = report["follow"]
+    assert not follow(SHARD)  # the shard is not an allowed host unless the call lists it
+    assert not follow("calendar.google.com")  # allowed globally, but not this account's
     assert b"time-range" in report["body"]
 
 
@@ -405,10 +413,10 @@ def base() -> Iterator[str]:
     server.server_close()
 
 
-def report(base: str, route: str, hosts: Collection[str] = ("127.0.0.1",)) -> bytes:
+def report(base: str, route: str, follow: Callable[[str], bool] = lambda host: False) -> bytes:
     client = HttpFetcher(schemes=("http",), timeout_s=3.0, attempts=1)
     return asyncio.run(
-        client.report(f"{base}/{route}", b"<q/>", user=USER, password=PASSWORD, hosts=hosts)
+        client.report(f"{base}/{route}", b"<q/>", user=USER, password=PASSWORD, follow=follow)
     )
 
 
@@ -439,7 +447,7 @@ def test_report_follows_a_redirect_to_an_allowed_host_with_method_body_and_crede
     base: str,
 ) -> None:
     Server.seen.clear()
-    assert b"multistatus" in report(base, "to-shard", hosts={"127.0.0.1", "localhost"})
+    assert b"multistatus" in report(base, "to-shard", follow=lambda host: host == "localhost")
     assert [s["path"] for s in Server.seen] == ["/cal/to-shard", "/shard/ok"]
     assert Server.seen[1]["auth"] == Server.seen[0]["auth"]
     assert Server.seen[1]["body"] == b"<q/>"
@@ -449,14 +457,14 @@ def test_report_follows_a_redirect_to_an_allowed_host_with_method_body_and_crede
 def test_report_refuses_a_redirect_elsewhere(base: str, route: str) -> None:
     Server.seen.clear()
     with pytest.raises(FetchError) as caught:
-        report(base, route)  # only 127.0.0.1 is allowed
+        report(base, route)  # same origin only: nothing else is followed
     assert caught.value.reason == "redirect_refused"
     assert len(Server.seen) == 1  # the credentials went nowhere else
 
 
 def test_report_does_not_follow_to_an_unlisted_port_even_on_an_allowed_host(base: str) -> None:
     with pytest.raises(FetchError) as caught:
-        report(base, "to-other-port", hosts={"127.0.0.1", "localhost"})
+        report(base, "to-other-port", follow=lambda host: host == "localhost")
     assert caught.value.reason == "redirect_refused"
 
 
@@ -464,6 +472,52 @@ def test_report_over_plain_http_is_refused_by_default(base: str) -> None:
     client = HttpFetcher()
     with pytest.raises(FetchError) as caught:
         asyncio.run(
-            client.report(f"{base}/ok", b"", user=USER, password=PASSWORD, hosts=["127.0.0.1"])
+            client.report(f"{base}/ok", b"", user=USER, password=PASSWORD, follow=lambda host: True)
         )
     assert caught.value.reason == "not_https"
+
+
+# --- credentials follow a redirect only to their account's shard -----------------------------
+
+ALLOWED = {"caldav.icloud.com", SHARD, "calendar.google.com", "evil.example.net"}
+
+
+def test_icloud_account_follows_only_a_strict_allowed_shard() -> None:
+    follow = caldav.shard_follow("caldav.icloud.com", ALLOWED)
+    assert follow(SHARD)
+    assert follow("p7-caldav.icloud.com") is False  # a shard, but not approved
+    for host in (
+        "calendar.google.com",  # allowed globally, not this account's
+        "evil.example.net",
+        "caldav.icloud.com",
+        "p1234-caldav.icloud.com",
+        "evil-caldav.icloud.com",
+        "p12-caldav.icloud.com.evil.net",
+        "xp12-caldav.icloud.com",
+        "p12-caldav-icloud.com",
+        "P12-caldav.icloud.com",
+    ):
+        assert follow(host) is False, host
+
+
+def test_a_shard_account_follows_a_shard_too() -> None:
+    assert caldav.shard_follow(SHARD, ALLOWED | {"p13-caldav.icloud.com"})("p13-caldav.icloud.com")
+
+
+@pytest.mark.parametrize("host", ["calendar.google.com", "dav.example.net"])
+def test_other_accounts_follow_nothing_even_an_allowed_shard(host: str) -> None:
+    follow = caldav.shard_follow(host, ALLOWED)
+    assert not any(follow(other) for other in (*ALLOWED, "p12-caldav.icloud.com"))
+
+
+def test_the_tool_binds_follow_to_the_account_and_allowed_hosts() -> None:
+    reporter = FakeReporter(multistatus())
+    plugin = caldav_plugin(reporter)
+    events(plugin, calendars=[SPEC], allowed_hosts=[SHARD, "evil.example.net"])
+    follow = reporter.reports[0]["follow"]
+    assert follow(SHARD)
+    assert not follow("evil.example.net")
+    assert not follow("calendar.google.com")
+    other = caldav_plugin(reporter, f"https://calendar.google.com/dav/ {USER} {PASSWORD}")
+    events(other, calendars=[SPEC], allowed_hosts=[SHARD])
+    assert not reporter.reports[1]["follow"](SHARD)

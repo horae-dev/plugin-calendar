@@ -1,0 +1,62 @@
+{
+  "tool": "calendar.events",
+  "params": {
+    "calendars": [
+      {
+        "name": "Work",
+        "index": 1
+      },
+      {
+        "name": "Down",
+        "index": 5
+      }
+    ],
+    "start": "2026-10-22",
+    "days": 2,
+    "timezone": "Europe/Paris",
+    "partial": true
+  },
+  "expect": {
+    "data": {
+      "window": {
+        "start": "2026-10-22T00:00:00+02:00",
+        "end": "2026-10-24T00:00:00+02:00",
+        "timezone": "Europe/Paris",
+        "days": 2
+      },
+      "complete": false,
+      "truncated": 0,
+      "calendars": [
+        {
+          "name": "Work",
+          "ok": true,
+          "complete": true,
+          "events": 1,
+          "skipped": 0,
+          "truncated": 0,
+          "warnings": 0
+        },
+        {
+          "name": "Down",
+          "ok": false,
+          "error": "timeout"
+        }
+      ],
+      "events": [
+        {
+          "id": "calendar:standup-1-example.org:20261022T073000Z::8f07e62204866eb0",
+          "calendar": "Work",
+          "title": "Team standup",
+          "start": "2026-10-22T09:30:00+02:00",
+          "end": "2026-10-22T09:45:00+02:00",
+          "all_day": false,
+          "location": "Room 1",
+          "description": null,
+          "status": "confirmed",
+          "recurring": true
+        }
+      ]
+    },
+    "intents": []
+  }
+}

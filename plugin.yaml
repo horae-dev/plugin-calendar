@@ -1,0 +1,23 @@
+# Written by `uv run python -m horae_calendar --manifest > plugin.yaml`; tests/test_manifest.py
+# checks it is what the SDK writes. When installing, pin runtime.command to an absolute
+# interpreter that has this package (horae-sdk README, "The command").
+name: calendar
+version: 0.1.0
+horae: '>=0,<0.2'
+description: Calendar events from ICS feeds (Proton, Google), recurrences expanded.
+license: Apache-2.0
+provides:
+  sources:
+  - calendar.events
+permissions:
+  network:
+  - calendar.google.com
+  - calendar.proton.me
+  secrets:
+  - CALENDAR_ICS_URLS
+runtime:
+  protocol: mcp-stdio
+  command:
+  - python3
+  - -m
+  - horae_calendar

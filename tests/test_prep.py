@@ -221,3 +221,17 @@ def test_through_mcp(plugin: Plugin) -> None:
     replayed = anyio.run(go)
     assert replayed.error is None, replayed.error
     assert [i["type"] for i in replayed.intents] == ["task.create"]
+
+
+def test_dates_at_the_ends_of_the_calendar_never_crash_the_transform() -> None:
+    """A feed can hold any year: an all-day event ending on 0001-01-01 (its last day would be
+    before date.min) is skipped, and one on 9999-12-31 gets its task, without OverflowError."""
+    events = [
+        ev(id="calendar:min", start="0001-01-01", end="0001-01-01", all_day=True),
+        ev(id="calendar:max", start="9999-12-31", end="9999-12-31", all_day=True),
+        ev(id="calendar:min-timed", start="0001-01-01T00:30:00+02:00"),
+    ]
+    data, intents = run(events, rules=[{"keywords": ["review"], "lead_days": 30}])
+    assert [i["fingerprint"] for i in intents] == ["calendar:prep:calendar:max"]
+    assert intents[0]["due"] == "9999-12-01"
+    assert data["tasks"] == 1

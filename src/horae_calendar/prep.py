@@ -205,7 +205,7 @@ def _event(raw: object) -> _Event | None:
         else:
             first = datetime.fromisoformat(start).date()  # the date in the event's own offset
             last = datetime.fromisoformat(end).date()
-    except ValueError:
+    except (ValueError, OverflowError):
         return None
     return _Event(id_, calendar, title, first, max(first, last))
 
@@ -261,7 +261,9 @@ def prep_tasks(
         if len(proposals) >= p.max_tasks:
             left_out += 1
             continue
-        due = max(event.first - timedelta(days=rule.lead_days), p.today)
+        # Compare before subtracting: an event near date.min would overflow.
+        lead = timedelta(days=rule.lead_days)
+        due = p.today if event.first - p.today <= lead else event.first - lead
         title = rule.title.replace(PLACEHOLDER, event.title, 1)
         proposals.append(intents.task_create(title, key=task_key(event.id), due=due))
     data = {

@@ -4,7 +4,7 @@
 name: calendar
 version: 0.1.0
 horae: '>=0,<0.2'
-description: Calendar events from ICS feeds (Proton, Google), recurrences expanded.
+description: Calendar events from ICS feeds and CalDAV, recurrences expanded.
 license: Apache-2.0
 provides:
   sources:
@@ -13,10 +13,12 @@ provides:
   - calendar.prep_tasks
 permissions:
   network:
+  - caldav.icloud.com
   - calendar.google.com
   - calendar.proton.me
   secrets:
   - CALENDAR_ICS_URLS
+  - CALENDAR_CALDAV
   intents:
   - task.create
 runtime:

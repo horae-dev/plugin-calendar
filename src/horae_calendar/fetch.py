@@ -19,8 +19,8 @@ data or in a recording. Every failure is a `FetchError` with a fixed `reason` co
   its own budget left;
 - at most `max_bytes` (10 MiB by default) **after** decompression, so a gzip bomb stops at
   the cap; a larger `Content-Length` is refused before reading;
-- **redirects: only to the same scheme, host and port, at most 3** (a CalDAV request may also
-  follow a redirect to another *allowed* host, see `HttpFetcher.report`). A share link that is
+- **redirects: only to the same scheme, host and port, at most 3** (a credentialed CalDAV request may also
+  follow one to its account's iCloud shard only, see `HttpFetcher.report`). A share link that is
   moved within its service (a path normalised, a new feed path) still works, while a
   redirect can never send the token-bearing request, or the user's trust, to another host:
   the allow-list holds for every hop. Any other redirect fails with `redirect_refused`;

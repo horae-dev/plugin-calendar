@@ -6,7 +6,7 @@ with `type: caldav` giving exactly what the ICS path gives. Never the network.""
 import asyncio
 import base64
 import threading
-from collections.abc import Callable, Collection, Iterator
+from collections.abc import Callable, Iterator
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any

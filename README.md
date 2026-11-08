@@ -4,7 +4,7 @@
 
 Horae plugin: calendars from ICS URLs, CalDAV and the Google Calendar API, with preparation tasks.
 
-> 🚧 **In progress.** The ICS source (`calendar.events`) is in. CalDAV (#3), the Google Calendar API (#4) are not yet. Preparation tasks (`calendar.prep_tasks`) are in. Follow progress on the [Horae roadmap project](https://github.com/orgs/horae-dev/projects/1).
+> 🚧 **In progress.** The ICS and CalDAV sources (`calendar.events`) are in. The Google Calendar API (#4) is not yet. Preparation tasks (`calendar.prep_tasks`) are in. Follow progress on the [Horae roadmap project](https://github.com/orgs/horae-dev/projects/1).
 
 It declares every host, secret, path and intent it uses in `plugin.yaml`, and it only returns
 data, except the `calendar.prep_tasks` transform, which proposes `task.create`; the
@@ -14,7 +14,8 @@ data, except the `calendar.prep_tasks` transform, which proposes `task.create`; 
 
 The events of a window of whole days, read from each calendar's ICS feed (a Proton Calendar
 share link, a Google Calendar "secret address in iCal format", or any other ICS URL on a host
-you allow), with recurring events expanded.
+you allow) or read from a **CalDAV** calendar (iCloud with an app-specific password, Fastmail,
+Nextcloud...), with recurring events expanded.
 
 ```yaml
 # pipelines/daily-brief.yaml
@@ -24,6 +25,7 @@ steps:
           calendars:
             - { name: Personal, index: 1 }   # the first URL of CALENDAR_ICS_URLS
             - { name: Family, index: 2 }     # the second
+            - { name: iCloud, index: 1, type: caldav }   # the first account of CALENDAR_CALDAV
           start: "{{date}}"         # the run's date
           timezone: "{{timezone}}"  # the instance's (or the trigger's) time zone
           days: 2
@@ -34,7 +36,7 @@ named `calendar-1`, `calendar-2`..., over today and tomorrow in the instance's t
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `calendars` | every URL of the secret | 1 to 16 calendars, each `{name, index}`: a display name (1 to 64 printable characters, unique) and the 1-based place of its feed URL in the `CALENDAR_ICS_URLS` secret (unique). An optional `type: ics` is the only type for now. Without it, every URL is read, named `calendar-<index>`. |
+| `calendars` | every URL of the secret | 1 to 16 calendars, each `{name, index}`: a display name (1 to 64 printable characters, unique) and the 1-based place of its feed URL in the `CALENDAR_ICS_URLS` secret (unique). `type` is `ics` (the default; `index` is the place in `CALENDAR_ICS_URLS`) or `caldav` (`index` is the place in `CALENDAR_CALDAV`, see [CalDAV](#caldav)); each type counts its own indexes. Without `calendars`, every ICS URL is read, named `calendar-<index>`. |
 | `start` | today in `timezone` | The first day, `YYYY-MM-DD`. Pass `"{{date}}"`: a replayed run then reads the same window, where the default depends on the day it runs. |
 | `days` | `2` | Whole days, 1 to 62. |
 | `timezone` | the instance's (`TZ`) | IANA time zone of the window and of the times returned. The host sets the plugin's `TZ` to the instance's time zone; `UTC` when `TZ` is not an IANA name. Pass `"{{timezone}}"` to follow the trigger's. |
@@ -145,9 +147,10 @@ reason, never the URL, the feed's text or an upstream message:
 |---|---|
 | `invalid_url`, `not_https`, `port_not_allowed` | The URL is not an `https://` (or `webcal://`) URL on the default port without user info. |
 | `host_not_allowed` | The URL's host is neither declared nor in `allowed_hosts`. |
+| `http_401`, `xml_refused`, `not_multistatus` | CalDAV only: wrong credentials; an answer that is not well-formed XML or declares a DTD or entity; an answer that is not a CalDAV multistatus (a login page). |
 | `timeout`, `connect_failed`, `tls_failed`, `transport_failed` | The service is down, slow or not who it claims to be. |
 | `http_<status>` | Any answer other than 200 (`http_404`: the link was revoked). |
-| `redirect_refused`, `too_many_redirects` | A redirect to another host, port or scheme, or more than 3. iCloud public calendar links redirect to another host (`pXX-caldav.icloud.com`) and are **not supported**. |
+| `redirect_refused`, `too_many_redirects` | A redirect to another host, port or scheme, or more than 3. An ICS feed never follows a redirect to another host (iCloud *public* calendar links redirect to `pXX-caldav.icloud.com`: use [CalDAV](#caldav) for iCloud instead); a CalDAV request follows one only to an allowed host, see [CalDAV](#caldav). |
 | `too_large`, `decode_failed` | Over 10 MiB once decompressed, or a broken compressed body. |
 | `not_icalendar`, `parse_failed` | Not an iCalendar feed (a login page) or one that cannot be parsed. |
 | `too_many_events` | More than 50,000 events in the feed. |
@@ -177,6 +180,96 @@ unexpected KeyError`), never with a message; skip and truncation counts are logg
 `DEBUG`.
 The core's per-call timeout (`plugin_defaults.call_timeout_s`, 30 s by default) bounds the
 whole call; raise it with `timeout_s` on the pipeline call for many or large calendars.
+
+## CalDAV
+
+A calendar with `type: caldav` is read from a CalDAV **calendar collection** URL. The plugin
+sends one `REPORT` (`calendar-query`) with a `time-range` of the window (plus a day on each side)
+and Depth 1, with HTTP Basic credentials over HTTPS, then expands the returned iCalendar
+objects with the same code as an ICS feed: recurrences (`RRULE`, `RDATE`, `EXDATE`, overrides),
+time zones, ids, text cleaning, the bounds and the `complete`/`skipped`/`truncated`/`partial`
+semantics are identical. The server's answer is untrusted: it is parsed with a hardened
+XML parser that refuses any `DOCTYPE`, entity or processing instruction (so no entity expansion
+and no external reference) and bounds the depth, the number of elements and resources, and the
+size of one resource (2 MiB); a resource that cannot be read is counted in `skipped`.
+
+### The credentials are a secret
+
+One more declared secret, **`CALENDAR_CALDAV`**: for each CalDAV calendar, three
+whitespace-separated words, `url user password`, all on one line (the core accepts no line
+break but a final one). A calendar refers to its triple by its 1-based `index`.
+
+```
+# /run/secrets/CALENDAR_CALDAV, one line:
+https://p12-caldav.icloud.com/1234567890/calendars/home/ me@icloud.com abcd-efgh-ijkl-mnop
+```
+
+Nothing is percent-decoded, so the user name and the password hold no whitespace (an iCloud
+Apple ID and app-specific password never do). The password is sent only as HTTP Basic over
+`https`, on the default port, to an allowed host, and is never logged, returned or put in an
+error (errors name the secret and counts only; an `Account` prints as `Account(<hidden>)`).
+At most 16 calendars.
+
+**The host starts a plugin only when every declared secret resolves.** `CALENDAR_CALDAV` is
+declared like `CALENDAR_ICS_URLS`, so an instance that uses only ICS feeds must still give it a
+value of at least 8 bytes, for example `not-in-use`; likewise an instance that uses only CalDAV
+must give `CALENDAR_ICS_URLS` one. A secret is read only when a calendar of its type is
+configured, so a placeholder is never parsed. (Secrets cannot be optional until the core
+supports it.)
+
+### Hosts and redirects
+
+`plugin.yaml` declares `caldav.icloud.com`. Any other CalDAV host (and every iCloud shard) goes
+through [Other hosts](#other-hosts): declare it, approve it in `horae.lock` and list it in the
+call's `allowed_hosts`. For a CalDAV request, a redirect is followed (at most 3, method, body
+and credentials kept) only to the same origin or **to another host that is allowed**, over
+`https` on the default port. The credentials therefore can never reach a host you did not
+approve, and a redirect to any other host fails with `redirect_refused`.
+
+### iCloud: manual check
+
+iCloud answers at `https://caldav.icloud.com` and redirects each account to a shard host
+`pNN-caldav.icloud.com`, where its collections live. The plugin takes the collection URL
+directly; finding it takes a few `curl` calls (nothing here is stored by the plugin):
+
+1. Turn on two-factor authentication for the Apple ID, then at
+   [account.apple.com](https://account.apple.com) (Sign-In and Security, App-Specific Passwords)
+   generate an **app-specific password** (`abcd-efgh-ijkl-mnop`). The Apple ID password does
+   not work, and the app password can be revoked there at any time.
+2. Find the principal (the answer holds `<current-user-principal>`, `/1234567890/principal/`):
+   ```
+   curl -s -u 'me@icloud.com:abcd-efgh-ijkl-mnop' -X PROPFIND -H 'Depth: 0' \
+     -H 'Content-Type: application/xml' --data \
+     '<propfind xmlns="DAV:"><prop><current-user-principal/></prop></propfind>' \
+     https://caldav.icloud.com/
+   ```
+3. Find the calendar home on the principal (`<calendar-home-set>`,
+   `https://p12-caldav.icloud.com:443/1234567890/calendars/`; **`p12-caldav.icloud.com` is
+   your shard host**):
+   ```
+   curl -s -u … -X PROPFIND -H 'Depth: 0' -H 'Content-Type: application/xml' --data \
+     '<propfind xmlns="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><prop><c:calendar-home-set/></prop></propfind>' \
+     https://caldav.icloud.com/1234567890/principal/
+   ```
+4. List the calendars with `Depth: 1` on the home (use the shard host) and pick the
+   `<displayname>` whose `<resourcetype>` holds `calendar`; its `href` is the collection,
+   `https://p12-caldav.icloud.com/1234567890/calendars/home/` for the default calendar.
+5. Put `url user password` in `CALENDAR_CALDAV`, add the shard host to `permissions.network` in
+   `plugin.yaml` (and regenerate it), approve it in `horae.lock`, and pass it in the call:
+   ```yaml
+   - calendar.events:
+       calendars: [{ name: iCloud, index: 1, type: caldav }]
+       allowed_hosts: [p12-caldav.icloud.com]
+       days: 7
+   ```
+6. Expect `complete: true` and your events, with recurring ones expanded and the right
+   times. `calendar failed: iCloud: http_401` is a wrong Apple ID or app password;
+   `host_not_allowed` / `redirect_refused` is the shard missing from `allowed_hosts`;
+   `http_403`/`http_404` a wrong collection URL. Shared and subscribed calendars live in
+   other collections of the same home.
+
+The CI proves the protocol against a real CalDAV server (Radicale, below) but cannot reach
+iCloud: this check against a real account is the part to do by hand.
 
 ## Configure and install
 
@@ -271,7 +364,9 @@ preparation; each matching event occurrence gets one task, due `lead_days` befor
 |---|---|---|
 | network | `calendar.google.com` | Google Calendar secret addresses (ICS) |
 | network | `calendar.proton.me` | Proton Calendar share links (ICS) |
+| network | `caldav.icloud.com` | iCloud CalDAV (a shard `pNN-caldav.icloud.com` is added per instance) |
 | secret | `CALENDAR_ICS_URLS` | The feed URLs, separated by spaces (each holds an access token) |
+| secret | `CALENDAR_CALDAV` | CalDAV `url user password` triples, separated by whitespace (the credentials) |
 | paths | none | |
 | intents | `task.create` | `calendar.prep_tasks` proposes preparation tasks (a task sink applies them) |
 
@@ -281,16 +376,26 @@ preparation; each matching event occurrence gets one task, due `lead_days` befor
 uv sync
 uv run ruff check && uv run ruff format --check
 uv run mypy
-uv run pytest --cov      # 85% gate
+uv run pytest --cov      # 85% gate; the Radicale tests skip unless CALDAV_TEST_URL is set
 uv run python -m horae_calendar --manifest > plugin.yaml
 ```
 
+- `src/horae_calendar/caldav.py`: the `calendar-query`, the hardened multistatus parser and the
+  merge of resources into one feed for `ics.expand`.
 - `src/horae_calendar/events.py`: the event model (`Event`, `Window`, ids, text cleaning),
   kept apart from ICS so the CalDAV (#3) and Google (#4) sources and the preparation-tasks
   transform (#5) reuse it.
 - `src/horae_calendar/ics.py`: parsing and expansion; `fetch.py`: the bounded HTTPS client
   and the URL checks; `plugin.py`: the `calendar.events` tool.
-- Tests never touch the network: a fake fetcher serves the fixtures to the tool, and the
+- **CalDAV integration test**: CI's `CalDAV (Radicale)` job starts Radicale (image pinned by
+  digest, htpasswd user with a synthetic password, loopback only) and runs
+  `tests/test_integration_caldav.py`, which seeds a collection with a recurring series (an
+  `EXDATE`, a moved instance), an all-day event and an old one, and checks the tool returns
+  them expanded. Locally: `docker run -d -p 127.0.0.1:5232:5232 -v $PWD/users:/users:ro
+  ghcr.io/kozea/radicale:3.5.7 --hosts 0.0.0.0:5232 --auth-type htpasswd --auth-htpasswd-filename
+  /users --auth-htpasswd-encryption plain` with `alice:synthetic-test-pass` in `users`, then
+  `CALDAV_TEST_URL=http://127.0.0.1:5232 uv run pytest tests/test_integration_caldav.py`.
+- Other tests never touch the network: a fake fetcher serves the fixtures to the tool, and the
   HTTP client is tested against HTTP and HTTPS servers on `127.0.0.1` (a `trustme` CA).
   `tests/recordings/` replays the tool through MCP; every fixture is synthetic, with
   `example.org` names, and the fake token must never appear in any output, log or error.

@@ -284,8 +284,8 @@ def test_parameters_are_checked(plugin: Plugin, params: dict[str, Any], message:
 
 
 def test_unknown_calendar_type(plugin: Plugin) -> None:
-    caldav = {"name": "W", "index": 1, "type": "caldav"}
-    assert "type" in error(plugin, calendars=[caldav])
+    other = {"name": "W", "index": 1, "type": "webdav"}
+    assert "calendars.0.type" in error(plugin, calendars=[other])
 
 
 def test_deterministic(plugin: Plugin) -> None:

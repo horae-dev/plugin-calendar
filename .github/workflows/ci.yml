@@ -82,6 +82,48 @@ jobs:
       # [tool.coverage.report] in pyproject.toml.
       - run: uv run pytest --cov --cov-report=term-missing
 
+  caldav:
+    name: CalDAV (Radicale)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # renovate: datasource=docker depName=ghcr.io/kozea/radicale
+      RADICALE_IMAGE: ghcr.io/kozea/radicale@sha256:ca73ad55d51ef4c3e360c781efa1661609c001b53ddaf4b4a38e091575d6349c # 3.5.7
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          cache-python: true
+      - run: uv sync
+      # A CalDAV server with a synthetic user (htpasswd), on the runner's loopback only. It is
+      # a `docker run` rather than a `services:` container because Radicale takes its
+      # authentication settings as command-line options, which a service cannot pass.
+      - name: Start Radicale
+        run: |
+          set -euo pipefail
+          printf 'alice:synthetic-test-pass\n' > "${RUNNER_TEMP}/users"
+          chmod 644 "${RUNNER_TEMP}/users"
+          docker run -d --name radicale -p 127.0.0.1:5232:5232 \
+            -v "${RUNNER_TEMP}/users:/users:ro" "${RADICALE_IMAGE}" \
+            --hosts 0.0.0.0:5232 --auth-type htpasswd \
+            --auth-htpasswd-filename /users --auth-htpasswd-encryption plain
+          for _ in $(seq 1 30); do
+            if curl -s -o /dev/null http://127.0.0.1:5232/.web/; then exit 0; fi
+            sleep 1
+          done
+          docker logs radicale
+          exit 1
+      - name: Integration tests (the tool against Radicale)
+        env:
+          CALDAV_TEST_URL: http://127.0.0.1:5232
+        run: uv run pytest tests/test_integration_caldav.py -v
+      - name: Server log on failure
+        if: ${{ failure() }}
+        run: docker logs radicale
+
   gitleaks:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
@@ -113,7 +155,7 @@ jobs:
   ci-ok:
     name: CI OK
     if: ${{ always() }}
-    needs: [lock, lint, types, test, gitleaks]
+    needs: [lock, lint, types, test, caldav, gitleaks]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}

@@ -19,7 +19,8 @@ data or in a recording. Every failure is a `FetchError` with a fixed `reason` co
   its own budget left;
 - at most `max_bytes` (10 MiB by default) **after** decompression, so a gzip bomb stops at
   the cap; a larger `Content-Length` is refused before reading;
-- **redirects: only to the same scheme, host and port, at most 3.** A share link that is
+- **redirects: only to the same scheme, host and port, at most 3** (a CalDAV request may also
+  follow a redirect to another *allowed* host, see `HttpFetcher.report`). A share link that is
   moved within its service (a path normalised, a new feed path) still works, while a
   redirect can never send the token-bearing request, or the user's trust, to another host:
   the allow-list holds for every hop. Any other redirect fails with `redirect_refused`;
@@ -28,10 +29,12 @@ data or in a recording. Every failure is a `FetchError` with a fixed `reason` co
 """
 
 import asyncio
+import base64
 import logging
 import ssl
 import time
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass, field
 from typing import NamedTuple, Protocol
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
@@ -69,6 +72,17 @@ class Fetcher(Protocol):
 
     async def fetch(self, url: str) -> bytes:
         """The body at `url`, an already checked URL (`FetchError` otherwise)."""
+        ...
+
+
+class Reporter(Protocol):
+    """Where the CalDAV answers come from (`HttpFetcher`; the tests give a fake one)."""
+
+    async def report(
+        self, url: str, body: bytes, *, user: str, password: str, hosts: Collection[str]
+    ) -> bytes:
+        """The body of a CalDAV `REPORT` with HTTP Basic credentials, at an already checked
+        URL; a redirect is followed only to a host of `hosts` (`FetchError` otherwise)."""
         ...
 
 
@@ -120,6 +134,24 @@ class _Parts(NamedTuple):
         return urlunsplit((self.scheme, netloc, self.path or "/", self.query, ""))
 
 
+@dataclass(frozen=True)
+class _Request:
+    """What differs between an ICS `GET` and a CalDAV `REPORT`."""
+
+    method: str = "GET"
+    body: bytes | None = None
+    headers: Mapping[str, str] = field(default_factory=dict)
+    status: frozenset[int] = frozenset({200})
+    redirect_hosts: frozenset[str] = frozenset()
+    """Hosts a redirect may lead to besides the current origin (https, default port)."""
+
+
+def basic_auth(user: str, password: str) -> str:
+    """The `Authorization` header value for HTTP Basic; handle it like the password."""
+    token = base64.b64encode(f"{user}:{password}".encode()).decode("ascii")
+    return f"Basic {token}"
+
+
 class HttpFetcher:
     """Fetches feeds with `httpx` (see the module docstring for the bounds).
 
@@ -152,6 +184,30 @@ class HttpFetcher:
         self.schemes = tuple(schemes)
 
     async def fetch(self, url: str) -> bytes:
+        return await self._run(url, _Request(), "text/calendar, */*;q=0.5")
+
+    async def report(
+        self, url: str, body: bytes, *, user: str, password: str, hosts: Collection[str]
+    ) -> bytes:
+        """The body of a CalDAV `REPORT` (a 207 multistatus) sent with HTTP Basic
+        credentials. Because the credentials go with the request, a redirect (iCloud sends
+        `caldav.icloud.com` to a `pNN-caldav.icloud.com` shard) is followed only to a host
+        of `hosts` over `https` on the default port; the method, body and credentials go
+        with it. Same bounds as `fetch`; a 401 is `http_401`."""
+        request = _Request(
+            method="REPORT",
+            body=body,
+            headers={
+                "Authorization": basic_auth(user, password),
+                "Content-Type": "application/xml; charset=utf-8",
+                "Depth": "1",
+            },
+            status=frozenset({207}),
+            redirect_hosts=frozenset(hosts),
+        )
+        return await self._run(url, request, "application/xml, text/xml")
+
+    async def _run(self, url: str, request: _Request, accept: str) -> bytes:
         target = _split(url, schemes=self.schemes)
         deadline = time.monotonic() + self.timeout_s
         timeout = httpx.Timeout(
@@ -166,11 +222,11 @@ class HttpFetcher:
                     follow_redirects=False,
                     verify=self.verify,
                     timeout=timeout,
-                    headers={"Accept": "text/calendar, */*;q=0.5", "User-Agent": USER_AGENT},
+                    headers={"Accept": accept, "User-Agent": USER_AGENT},
                 ) as client,
             ):
                 for attempt in range(1, self.attempts + 1):
-                    error = await self._attempt(client, target, deadline)
+                    error = await self._attempt(client, target, request, deadline)
                     if isinstance(error, bytes):
                         return error
                     retry = error.reason in _RETRY_REASONS or error.reason in {
@@ -189,27 +245,31 @@ class HttpFetcher:
         raise FetchError("transport_failed")  # pragma: no cover (attempts >= 1)
 
     async def _attempt(
-        self, client: httpx.AsyncClient, target: "_Parts", deadline: float
+        self, client: httpx.AsyncClient, target: "_Parts", request: _Request, deadline: float
     ) -> "bytes | FetchError":
         """One attempt within its own budget: the body, or why it failed."""
         budget = min(self.attempt_timeout_s, deadline - time.monotonic())
         try:
             async with asyncio.timeout(budget):
-                return await self._get(client, target)
+                return await self._get(client, target, request)
         except FetchError as error:
             return error
         except TimeoutError:
             return FetchError("timeout")
 
-    async def _get(self, client: httpx.AsyncClient, target: _Parts) -> bytes:
+    async def _get(self, client: httpx.AsyncClient, target: _Parts, request: _Request) -> bytes:
         current = target
         for _hop in range(self.max_redirects + 1):
             try:
-                async with client.stream("GET", current.url()) as response:
+                async with client.stream(
+                    request.method, current.url(), content=request.body, headers=request.headers
+                ) as response:
                     if response.status_code in _REDIRECTS:
-                        current = self._redirect(current, response.headers.get("location"))
+                        current = self._redirect(
+                            current, response.headers.get("location"), request.redirect_hosts
+                        )
                         continue
-                    if response.status_code != 200:
+                    if response.status_code not in request.status:
                         raise FetchError(f"http_{response.status_code}")
                     return await self._body(response)
             except FetchError:
@@ -224,16 +284,23 @@ class HttpFetcher:
                 raise FetchError("transport_failed") from None
         raise FetchError("too_many_redirects")
 
-    def _redirect(self, current: _Parts, location: str | None) -> _Parts:
+    def _redirect(self, current: _Parts, location: str | None, hosts: Collection[str]) -> _Parts:
         if not location:
             raise FetchError("redirect_refused")
         try:
             following = _split(urljoin(current.url(), location), schemes=self.schemes)
         except FetchError:
             raise FetchError("redirect_refused") from None
-        if following.origin() != current.origin():
-            raise FetchError("redirect_refused")
-        return following
+        if following.origin() == current.origin():
+            return following
+        # Another host: only an allowed one, over the same scheme and the default port.
+        if (
+            following.hostname in hosts
+            and following.scheme == current.scheme
+            and following.origin()[2] == current.origin()[2]
+        ):
+            return following
+        raise FetchError("redirect_refused")
 
     async def _body(self, response: httpx.Response) -> bytes:
         declared = response.headers.get("content-length")

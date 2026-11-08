@@ -1,0 +1,4 @@
+# Findings gitleaks reports in history that are not secrets (CI scans the full history,
+# so a commit already pushed cannot be fixed by editing the file).
+# README.md: a `curl -u 'user:app-password'` placeholder example, since replaced.
+cd7a45bdafd6a15fc6ac135319a511b2471d87d7:README.md:curl-auth-user:241

@@ -4,10 +4,11 @@
 
 Horae plugin: calendars from ICS URLs, CalDAV and the Google Calendar API, with preparation tasks.
 
-> 🚧 **In progress.** The ICS source (`calendar.events`) is in. CalDAV (#3), the Google Calendar API (#4) and preparation tasks (#5) are not yet. Follow progress on the [Horae roadmap project](https://github.com/orgs/horae-dev/projects/1).
+> 🚧 **In progress.** The ICS source (`calendar.events`) is in. CalDAV (#3), the Google Calendar API (#4) are not yet. Preparation tasks (`calendar.prep_tasks`) are in. Follow progress on the [Horae roadmap project](https://github.com/orgs/horae-dev/projects/1).
 
 It declares every host, secret, path and intent it uses in `plugin.yaml`, and it only returns
-data: the `calendar.events` source proposes no intent.
+data, except the `calendar.prep_tasks` transform, which proposes `task.create`; the
+`calendar.events` source proposes no intent.
 
 ## `calendar.events`
 
@@ -235,6 +236,35 @@ into their own environments (M4), pin the command to an **absolute** interpreter
 package, as the [SDK README](https://github.com/horae-dev/horae/blob/main/sdk/README.md#manifest)
 explains. It needs network access to the feed hosts and nothing else: no path, no intent.
 
+## `calendar.prep_tasks`
+
+A transform: the `calendar.events` data of a collect step in, `task.create` proposals out, with
+no LLM and no clock (`today` is the pipeline's `{{date}}`). Rules decide which events need
+preparation; each matching event occurrence gets one task, due `lead_days` before it.
+
+```yaml
+- transform: calendar.prep_tasks
+  params:
+    today: "{{date}}"
+    max_tasks: 50          # default 50, at most 200
+    rules:                 # the first matching rule decides
+      - keywords: [review, trip]       # in the title, ignoring case
+        regex: '^board\b'              # or a pattern (case-insensitive)
+        calendars: [Work]              # optional: only these calendars
+        lead_days: 2                   # default 1: the day before
+        title: "Prepare: ${title}"     # default; ${title} is the event's title
+```
+
+- One task per occurrence: fingerprint `calendar:prep:<event id>`, so each instance of a
+  recurring event has its own task and a later run proposes the same fingerprint.
+- Due date: the event's date in its own time zone minus `lead_days` calendar days (daylight
+  saving and month ends do not move it); an ended event gets no task and a due date in the past
+  becomes `today`. Cancelled events are not in `calendar.events`.
+- Titles are untrusted: `intents.task_create` escapes the whole title.
+- Bounds: up to 20 rules, 20 keywords per rule, a 200-character regex (a repeated group that
+  repeats is refused), 200 tasks; `data` counts `events`, `matched`, `past`, `skipped`,
+  `tasks` and `left_out`.
+
 ## Permissions
 
 | Kind | Value | Why |
@@ -243,7 +273,7 @@ explains. It needs network access to the feed hosts and nothing else: no path, n
 | network | `calendar.proton.me` | Proton Calendar share links (ICS) |
 | secret | `CALENDAR_ICS_URLS` | The feed URLs, separated by spaces (each holds an access token) |
 | paths | none | |
-| intents | none | A pure source: it returns events, it proposes nothing |
+| intents | `task.create` | `calendar.prep_tasks` proposes preparation tasks (a task sink applies them) |
 
 ## Development
 

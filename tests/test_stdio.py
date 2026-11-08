@@ -34,6 +34,6 @@ async def serve_and_call() -> tuple[set[str], Replayed, Replayed]:
 
 def test_serves_over_stdio() -> None:
     tools, refused, bad = anyio.run(serve_and_call)
-    assert tools == {TOOL}
+    assert tools == {TOOL, "calendar.prep_tasks"}
     assert refused.error == "calendar failed: Personal: host_not_allowed"
     assert bad.error == "days must be a whole number from 1 to 62"

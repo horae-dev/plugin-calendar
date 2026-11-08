@@ -30,16 +30,16 @@ import datetime as dt
 import logging
 import os
 import re
-from collections.abc import Callable, Mapping
-from typing import Any, Literal, NotRequired, TypedDict
+from collections.abc import Callable, Coroutine, Mapping
+from typing import Any, Literal, NotRequired, TypedDict, cast
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from horae_sdk import Call, Output, Permissions, Plugin, PluginError
 
-from horae_calendar import caldav, prep
+from horae_calendar import caldav, google, prep
 from horae_calendar.events import Event, Window, WindowError
-from horae_calendar.fetch import Fetcher, FetchError, HttpFetcher, Reporter, check_url
+from horae_calendar.fetch import Api, Fetcher, FetchError, HttpFetcher, Reporter, check_url
 from horae_calendar.ics import Expansion, IcsError, expand
 
 NAME = "calendar"
@@ -49,17 +49,29 @@ HORAE = ">=0,<0.2"
 COMMAND = ["python3", "-m", "horae_calendar"]
 """`runtime.command` of `plugin.yaml`. When installing, pin an absolute interpreter that has
 this package (the host's `PATH` is fixed and its working directory empty)."""
-HOSTS = ("caldav.icloud.com", "calendar.google.com", "calendar.proton.me")
+HOSTS = (
+    "caldav.icloud.com",
+    "calendar.google.com",
+    "calendar.proton.me",
+    "oauth2.googleapis.com",
+    "www.googleapis.com",
+)
 """The hosts declared in `plugin.yaml`: iCloud's CalDAV entry point, Google Calendar's secret
-addresses and Proton Calendar's share links. Others (an iCloud shard `pNN-caldav.icloud.com`,
-a Fastmail or Nextcloud server) are approved per instance (README, "Other hosts")."""
+addresses, Proton Calendar's share links, and Google's token endpoint and Calendar API.
+Others (an iCloud shard `pNN-caldav.icloud.com`, a Fastmail or Nextcloud server) are approved
+per instance (README, "Other hosts")."""
 SECRET = "CALENDAR_ICS_URLS"  # noqa: S105 (a secret's name, not its value)
 """The declared secret: every feed URL, separated by whitespace."""
 CALDAV_SECRET = "CALENDAR_CALDAV"  # noqa: S105 (a secret's name, not its value)
 """The declared secret of the CalDAV calendars: `url user password` triples, separated by
 whitespace (`horae_calendar.caldav.accounts`)."""
+GOOGLE_SECRET = "CALENDAR_GOOGLE"  # noqa: S105 (a secret's name, not its value)
+"""The declared secret of the Google accounts: `client_id client_secret refresh_token`
+triples, separated by whitespace (`horae_calendar.google.accounts`)."""
 PERMISSIONS = Permissions(
-    network=list(HOSTS), secrets=[SECRET, CALDAV_SECRET], intents=["task.create"]
+    network=list(HOSTS),
+    secrets=[SECRET, CALDAV_SECRET, GOOGLE_SECRET],
+    intents=["task.create"],
 )
 """Declare the least you need: every network host, secret, path and intent type. The only
 intent is `task.create`, which `calendar.prep_tasks` proposes (a task sink applies it)."""
@@ -74,17 +86,21 @@ _log = logging.getLogger("horae_calendar")
 
 
 class CalendarSpec(TypedDict):
-    """One calendar: a display `name` and the 1-based `index` of its URL in the secret."""
+    """One calendar: a display `name` and the 1-based `index` of its URL (or account) in the
+    secret of its `type` (for Google, the account). A Google calendar also has a `calendar_id`
+    (default `primary`)."""
 
     name: str
     index: int
-    type: NotRequired[Literal["ics", "caldav"]]
+    type: NotRequired[Literal["ics", "caldav", "google"]]
+    calendar_id: NotRequired[str]
 
 
 def build(
     fetcher: Fetcher | None = None,
     *,
     reporter: Reporter | None = None,
+    api: Api | None = None,
     environ: Mapping[str, str] | None = None,
     clock: Callable[[], dt.datetime] | None = None,
 ) -> Plugin:
@@ -99,13 +115,16 @@ def build(
         if isinstance(client, HttpFetcher)
         else HttpFetcher()
     )
+    google_client: Api = (
+        api if api is not None else client if isinstance(client, HttpFetcher) else HttpFetcher()
+    )
     env: Mapping[str, str] = environ if environ is not None else os.environ
     now = clock if clock is not None else (lambda: dt.datetime.now(dt.UTC))
     plugin = Plugin(
         NAME,
         version=VERSION,
         permissions=PERMISSIONS,
-        description="Calendar events from ICS feeds and CalDAV, recurrences expanded.",
+        description="Calendar events from ICS feeds, CalDAV and Google, recurrences expanded.",
     )
 
     @plugin.source(f"{NAME}.events")
@@ -136,24 +155,34 @@ def build(
         if specs is None:
             specs = [{"name": f"calendar-{n}", "index": n} for n in range(1, len(urls) + 1)]
         accounts = _accounts(env) if any(spec.get("type") == "caldav" for spec in specs) else []
+        google_accounts = (
+            _google_accounts(env) if any(spec.get("type") == "google" for spec in specs) else []
+        )
         for position, spec in enumerate(specs):
             kind = spec.get("type", "ics")
-            held, secret, noun = (
-                (accounts, CALDAV_SECRET, "account") if kind == "caldav" else (urls, SECRET, "URL")
-            )
-            if spec["index"] > len(held):
+            counts = {"caldav": len(accounts), "google": len(google_accounts)}
+            held = counts.get(kind, len(urls))
+            secret = {"caldav": CALDAV_SECRET, "google": GOOGLE_SECRET}.get(kind, SECRET)
+            noun = "URL" if kind == "ics" else "account"
+            if spec["index"] > held:
                 raise PluginError(
                     f"config_invalid: calendars[{position}].index is {spec['index']} but "
-                    f"{secret} holds {len(held)} {noun}(s)"
+                    f"{secret} holds {held} {noun}(s)"
                 )
-        results = await asyncio.gather(
-            *(
-                _caldav(caldav_client, accounts[spec["index"] - 1], hosts, spec, window)
-                if spec.get("type") == "caldav"
-                else _calendar(client, urls[spec["index"] - 1], hosts, spec, window)
-                for spec in specs
-            )
-        )
+        tokens = {  # one access token per account, for this call only
+            n: google.AccessTokens(google_client, google_accounts[n - 1])
+            for n in {spec["index"] for spec in specs if spec.get("type") == "google"}
+        }
+
+        def read(spec: CalendarSpec) -> Coroutine[Any, Any, Expansion | str]:
+            kind = spec.get("type", "ics")
+            if kind == "caldav":
+                return _caldav(caldav_client, accounts[spec["index"] - 1], hosts, spec, window)
+            if kind == "google":
+                return _google(google_client, tokens[spec["index"]], spec, window)
+            return _calendar(client, urls[spec["index"] - 1], hosts, spec, window)
+
+        results = await asyncio.gather(*(read(spec) for spec in specs))
         return Output(_merge(specs, results, window, partial=partial))
 
     @plugin.transform(prep.REF)
@@ -203,6 +232,20 @@ def _accounts(env: Mapping[str, str]) -> list[caldav.Account]:
     return found
 
 
+def _google_accounts(env: Mapping[str, str]) -> list[google.Credentials]:
+    """The Google accounts of the secret (never echoed: errors give counts only)."""
+    value = env.get(GOOGLE_SECRET) or ""
+    if not value.strip():
+        raise PluginError(f"secret_missing: {GOOGLE_SECRET} is not set or empty")
+    found = google.accounts(value, MAX_CALENDARS)
+    if found is None:
+        raise PluginError(
+            f"config_invalid: {GOOGLE_SECRET} must hold at most {MAX_CALENDARS} "
+            "`client_id client_secret refresh_token` triples separated by whitespace"
+        )
+    return found
+
+
 def _calendars(value: object) -> list[CalendarSpec] | None:
     """The `calendars` parameter, checked (trusted configuration: errors name the field)."""
     if value is None:
@@ -210,7 +253,8 @@ def _calendars(value: object) -> list[CalendarSpec] | None:
     if not isinstance(value, list) or not 1 <= len(value) <= MAX_CALENDARS:
         raise PluginError(f"config_invalid: calendars must list 1 to {MAX_CALENDARS} calendars")
     names: set[str] = set()
-    indexes: set[tuple[str, int]] = set()
+    indexes: set[tuple[object, object, object]] = set()
+    specs: list[CalendarSpec] = []
     for position, spec in enumerate(value):
         name = spec.get("name") if isinstance(spec, Mapping) else None
         index = spec.get("index") if isinstance(spec, Mapping) else None
@@ -222,13 +266,25 @@ def _calendars(value: object) -> list[CalendarSpec] | None:
             raise PluginError(f"{where}.name is used twice")
         if type(index) is not int or not 1 <= index <= MAX_CALENDARS:
             raise PluginError(f"{where}.index must be a whole number from 1 to {MAX_CALENDARS}")
-        if kind not in ("ics", "caldav"):
-            raise PluginError(f"{where}.type must be ics or caldav")
-        if (kind, index) in indexes:
+        if kind not in ("ics", "caldav", "google"):
+            raise PluginError(f"{where}.type must be ics, caldav or google")
+        calendar_id = spec.get("calendar_id") if isinstance(spec, Mapping) else None
+        if kind == "google":
+            calendar_id = "primary" if calendar_id is None else calendar_id
+            if not isinstance(calendar_id, str) or not google.CALENDAR_ID.fullmatch(calendar_id):
+                raise PluginError(f"{where}.calendar_id must be 1 to 256 characters, no spaces")
+        elif calendar_id is not None:
+            raise PluginError(f"{where}.calendar_id is for type google")
+        key = (kind, index, calendar_id)
+        if key in indexes:
             raise PluginError(f"{where}.index is used twice")
         names.add(name)
-        indexes.add((kind, index))
-    return list(value)
+        indexes.add(key)
+        checked: dict[str, Any] = {"name": name, "index": index, "type": kind}
+        if kind == "google":
+            checked["calendar_id"] = calendar_id
+        specs.append(cast(CalendarSpec, checked))
+    return specs
 
 
 def _hosts(value: object) -> frozenset[str]:
@@ -248,6 +304,22 @@ def _hosts(value: object) -> frozenset[str]:
                 "config_invalid: allowed_hosts: each host is a lowercase DNS name (no IP, no port)"
             )
     return frozenset(value)
+
+
+async def _google(
+    client: Api, tokens: google.AccessTokens, spec: CalendarSpec, window: Window
+) -> Expansion | str:
+    """The Google calendar's events, or the reason it failed (a fixed code)."""
+    try:
+        return await google.read(
+            client, tokens, spec.get("calendar_id", "primary"), spec["name"], window
+        )
+    except (FetchError, google.GoogleError) as error:
+        return error.reason
+    except Exception as error:
+        # The type only: a message could hold a token.
+        _log.error("calendar %s: unexpected %s", spec.get("index"), type(error).__name__)
+        return "internal_error"
 
 
 async def _caldav(

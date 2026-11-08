@@ -76,6 +76,23 @@ class Fetcher(Protocol):
         ...
 
 
+class Api(Protocol):
+    """Where the Google API answers come from (`HttpFetcher`; the tests give a fake one)."""
+
+    async def api(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        body: bytes | None = None,
+    ) -> tuple[int, bytes]:
+        """The status and body of a JSON API call at an already checked URL. A status of
+        200, 400, 401, 403 or 429 is returned (the caller reads the error's body); any other
+        is a `FetchError`. A redirect never leaves the URL's origin."""
+        ...
+
+
 class Reporter(Protocol):
     """Where the CalDAV answers come from (`HttpFetcher`; the tests give a fake one)."""
 
@@ -192,7 +209,27 @@ class HttpFetcher:
         self.schemes = tuple(schemes)
 
     async def fetch(self, url: str) -> bytes:
-        return await self._run(url, _Request(), "text/calendar, */*;q=0.5")
+        return (await self._run(url, _Request(), "text/calendar, */*;q=0.5"))[1]
+
+    async def api(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        body: bytes | None = None,
+    ) -> tuple[int, bytes]:
+        """A JSON API call (Google's token and Calendar endpoints) whose `headers` may hold a
+        credential (a bearer token, or a body with a client secret): same bounds as `fetch`,
+        redirects to the same origin only. 200, 400, 401, 403 and 429 are returned with
+        their body (the error codes are in it); another status is `http_<status>`."""
+        request = _Request(
+            method=method,
+            body=body,
+            headers=headers,
+            status=frozenset({200, 400, 401, 403, 429}),
+        )
+        return await self._run(url, request, "application/json")
 
     async def report(
         self,
@@ -220,9 +257,9 @@ class HttpFetcher:
             status=frozenset({207}),
             follow=follow,
         )
-        return await self._run(url, request, "application/xml, text/xml")
+        return (await self._run(url, request, "application/xml, text/xml"))[1]
 
-    async def _run(self, url: str, request: _Request, accept: str) -> bytes:
+    async def _run(self, url: str, request: _Request, accept: str) -> tuple[int, bytes]:
         target = _split(url, schemes=self.schemes)
         deadline = time.monotonic() + self.timeout_s
         timeout = httpx.Timeout(
@@ -242,7 +279,7 @@ class HttpFetcher:
             ):
                 for attempt in range(1, self.attempts + 1):
                     error = await self._attempt(client, target, request, deadline)
-                    if isinstance(error, bytes):
+                    if isinstance(error, tuple):
                         return error
                     retry = error.reason in _RETRY_REASONS or error.reason in {
                         f"http_{status}" for status in _RETRY_STATUS
@@ -261,7 +298,7 @@ class HttpFetcher:
 
     async def _attempt(
         self, client: httpx.AsyncClient, target: "_Parts", request: _Request, deadline: float
-    ) -> "bytes | FetchError":
+    ) -> "tuple[int, bytes] | FetchError":
         """One attempt within its own budget: the body, or why it failed."""
         budget = min(self.attempt_timeout_s, deadline - time.monotonic())
         try:
@@ -272,7 +309,9 @@ class HttpFetcher:
         except TimeoutError:
             return FetchError("timeout")
 
-    async def _get(self, client: httpx.AsyncClient, target: _Parts, request: _Request) -> bytes:
+    async def _get(
+        self, client: httpx.AsyncClient, target: _Parts, request: _Request
+    ) -> tuple[int, bytes]:
         current = target
         for _hop in range(self.max_redirects + 1):
             try:
@@ -286,7 +325,7 @@ class HttpFetcher:
                         continue
                     if response.status_code not in request.status:
                         raise FetchError(f"http_{response.status_code}")
-                    return await self._body(response)
+                    return response.status_code, await self._body(response)
             except FetchError:
                 raise
             except httpx.TimeoutException:

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""`python -m horae_calendar` serves the plugin over stdio; `--manifest` prints `plugin.yaml`."""
+"""`python -m horae_calendar` serves the plugin over stdio; `--manifest` prints `plugin.yaml`;
+`google-auth` runs the one-time Google consent on the user's machine (never while serving)."""
 
 import sys
 
@@ -18,8 +19,13 @@ def main(argv: list[str]) -> None:
     if argv == ["--manifest"]:
         sys.stdout.write(HEADER + dump_manifest(manifest()))
         return
+    if argv[:1] == ["google-auth"]:
+        from horae_calendar import google_auth
+
+        google_auth.main(argv[1:])
+        return
     if argv:
-        sys.exit("usage: python -m horae_calendar [--manifest]")
+        sys.exit("usage: python -m horae_calendar [--manifest | google-auth [--no-browser]]")
     # Never print while serving: stdout is the protocol channel.
     build().run()
 

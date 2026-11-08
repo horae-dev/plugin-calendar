@@ -4,7 +4,7 @@
 
 Horae plugin: calendars from ICS URLs, CalDAV and the Google Calendar API, with preparation tasks.
 
-> 🚧 **In progress.** The ICS and CalDAV sources (`calendar.events`) are in. The Google Calendar API (#4) is not yet. Preparation tasks (`calendar.prep_tasks`) are in. Follow progress on the [Horae roadmap project](https://github.com/orgs/horae-dev/projects/1).
+> 🚧 **In progress.** The ICS, CalDAV and Google Calendar API sources (`calendar.events`) are in. Preparation tasks (`calendar.prep_tasks`) are in. Follow progress on the [Horae roadmap project](https://github.com/orgs/horae-dev/projects/1).
 
 It declares every host, secret, path and intent it uses in `plugin.yaml`, and it only returns
 data, except the `calendar.prep_tasks` transform, which proposes `task.create`; the
@@ -15,7 +15,7 @@ data, except the `calendar.prep_tasks` transform, which proposes `task.create`; 
 The events of a window of whole days, read from each calendar's ICS feed (a Proton Calendar
 share link, a Google Calendar "secret address in iCal format", or any other ICS URL on a host
 you allow) or read from a **CalDAV** calendar (iCloud with an app-specific password, Fastmail,
-Nextcloud...), with recurring events expanded.
+Nextcloud...) or from the **Google Calendar API** (OAuth), with recurring events expanded.
 
 ```yaml
 # pipelines/daily-brief.yaml
@@ -26,6 +26,7 @@ steps:
             - { name: Personal, index: 1 }   # the first URL of CALENDAR_ICS_URLS
             - { name: Family, index: 2 }     # the second
             - { name: iCloud, index: 1, type: caldav }   # the first account of CALENDAR_CALDAV
+            - { name: Google, index: 1, type: google }   # the first account of CALENDAR_GOOGLE, primary calendar
           start: "{{date}}"         # the run's date
           timezone: "{{timezone}}"  # the instance's (or the trigger's) time zone
           days: 2
@@ -36,7 +37,7 @@ named `calendar-1`, `calendar-2`..., over today and tomorrow in the instance's t
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `calendars` | every URL of the secret | 1 to 16 calendars, each `{name, index}`: a display name (1 to 64 printable characters, unique) and the 1-based place of its feed URL in the `CALENDAR_ICS_URLS` secret (unique). `type` is `ics` (the default; `index` is the place in `CALENDAR_ICS_URLS`) or `caldav` (`index` is the place in `CALENDAR_CALDAV`, see [CalDAV](#caldav)); each type counts its own indexes. Without `calendars`, every ICS URL is read, named `calendar-<index>`. |
+| `calendars` | every URL of the secret | 1 to 16 calendars, each `{name, index}`: a display name (1 to 64 printable characters, unique) and the 1-based place of its feed URL in the `CALENDAR_ICS_URLS` secret (unique). `type` is `ics` (the default; `index` is the place in `CALENDAR_ICS_URLS`) or `caldav` (`index` is the place in `CALENDAR_CALDAV`, see [CalDAV](#caldav)); `google` (`index` is the account in `CALENDAR_GOOGLE`, see [Google Calendar API](#google-calendar-api); add `calendar_id`, default `primary`, to read another calendar of the account); each type counts its own indexes. Without `calendars`, every ICS URL is read, named `calendar-<index>`. |
 | `start` | today in `timezone` | The first day, `YYYY-MM-DD`. Pass `"{{date}}"`: a replayed run then reads the same window, where the default depends on the day it runs. |
 | `days` | `2` | Whole days, 1 to 62. |
 | `timezone` | the instance's (`TZ`) | IANA time zone of the window and of the times returned. The host sets the plugin's `TZ` to the instance's time zone; `UTC` when `TZ` is not an IANA name. Pass `"{{timezone}}"` to follow the trigger's. |
@@ -147,6 +148,7 @@ reason, never the URL, the feed's text or an upstream message:
 |---|---|
 | `invalid_url`, `not_https`, `port_not_allowed` | The URL is not an `https://` (or `webcal://`) URL on the default port without user info. |
 | `host_not_allowed` | The URL's host is neither declared nor in `allowed_hosts`. |
+| `auth_failed`, `rate_limited`, `bad_response`, `token_http_<status>` | Google only: see [Failures](#google-failures). |
 | `http_401`, `xml_refused`, `not_multistatus` | CalDAV only: wrong credentials; an answer that is not well-formed XML or declares a DTD or entity; an answer that is not a CalDAV multistatus (a login page). |
 | `timeout`, `connect_failed`, `tls_failed`, `transport_failed` | The service is down, slow or not who it claims to be. |
 | `http_<status>` | Any answer other than 200 (`http_404`: the link was revoked). |
@@ -273,6 +275,129 @@ directly; finding it takes a few `curl` calls (nothing here is stored by the plu
 The CI proves the protocol against a real CalDAV server (Radicale, below) but cannot reach
 iCloud: this check against a real account is the part to do by hand.
 
+## Google Calendar API
+
+A calendar with `type: google` is read with the Google Calendar API v3 (`events.list`), with
+`singleEvents=true` (Google expands the recurring events), the window as `timeMin`/`timeMax`,
+`orderBy=startTime`, 250 events per page and at most 10 pages. Events become the same
+`Event`s as for ICS and CalDAV (all-day or timed, in the window's time zone; cancelled events
+left out; `tentative` kept; ids from `iCalUID` plus the original start of an instance, so a
+moved instance keeps its id and an invitation in an ICS and a Google calendar is returned
+once). At most 2000 events per calendar; a calendar cut by that cap, by the 10 pages or by
+the 30 s budget is `complete: false` with `truncated: 1`. Titles, locations and descriptions
+are cleaned as plain text, exactly as for ICS.
+
+```yaml
+- calendar.events:
+    calendars:
+      - { name: Perso, type: google }                                   # primary calendar
+      - { name: Team, type: google, calendar_id: team@group.calendar.google.com }
+      - { name: Other, type: google, index: 2 }                         # a second Google account
+```
+
+### Set up the OAuth app (once)
+
+The plugin reads your own calendar with your own OAuth client; nothing is shared with anyone.
+
+1. In the [Google Cloud console](https://console.cloud.google.com/) create a project (or
+   pick one) and enable the **Google Calendar API** (APIs and services, Library).
+2. **OAuth consent screen** (Google Auth platform, Branding and Audience): user type
+   **External** for a personal Gmail account (**Internal** only if you have a Google
+   Workspace and are in its organisation). Fill the app name and your e-mail.
+3. **Scopes** (Data access): add the read-only
+   `https://www.googleapis.com/auth/calendar.events.readonly`. (`calendar.readonly` also
+   works and also lets the plugin read the calendars' list, which it does not need.)
+   Nothing here can write to a calendar.
+4. **Publish the app: set the publishing status to "In production".** This is the step
+   that matters. An app left in **"Testing"** issues refresh tokens that **expire after 7
+   days**, so the pipeline would break every week with `auth_failed`. Publishing a personal
+   app that uses a sensitive scope shows an "unverified app" warning at consent, which you
+   accept for your own account (Advanced, Go to the app); Google's verification process is
+   for apps used by other people and is not needed for personal use.
+   If you add yourself as a test user instead of publishing, you must repeat step 6 every
+   week.
+5. **Credentials, Create credentials, OAuth client ID**, application type **Desktop app**
+   (the installed-app flow with a loopback redirect: no redirect URI to register). Note the
+   client id and the client secret (for a Desktop app the secret is not confidential in the
+   OAuth sense, but the plugin still treats it as a secret).
+6. Get the refresh token with the helper below.
+
+### Get the refresh token
+
+Run this **on your machine, once**; it is not part of the plugin server and is not run by
+Horae. It needs the plugin's package (`uv run` in a clone, or the interpreter you pin in
+`plugin.yaml`):
+
+```
+umask 077
+GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... python -m horae_calendar google-auth > CALENDAR_GOOGLE
+```
+
+(without the variables it asks for the client id and secret, the secret without echo;
+`--no-browser` only prints the consent URL instead of opening a browser). It starts a server
+on `127.0.0.1` on a free port, opens Google's consent page (`accounts.google.com`, which only
+this helper talks to), receives the answer on that port with a one-time `state` and a PKCE
+challenge, exchanges the code, and prints **one line on stdout**, `client_id client_secret
+refresh_token`: the value of the secret. Everything else (the consent URL, errors) goes to
+stderr, and nothing is stored by the command. If Google returns no refresh token (the app
+had already been authorised), remove its access at
+[myaccount.google.com/permissions](https://myaccount.google.com/permissions) and run it again.
+Move the file to the secrets directory (`/run/secrets/CALENDAR_GOOGLE`, mode 600) and delete
+your copy.
+
+### The credentials are a secret
+
+One more declared secret, **`CALENDAR_GOOGLE`**: for each Google account, three
+whitespace-separated words, `client_id client_secret refresh_token`, on one line (at most 16
+accounts; a calendar's `index` is the account's place). Like `CALENDAR_CALDAV`, it is
+**declared, so the host starts the plugin only when it resolves**: an instance that does not
+use Google must give it a placeholder of at least 8 bytes (for example `not-in-use`), and one
+that uses only Google must do the same for `CALENDAR_ICS_URLS` and `CALENDAR_CALDAV`
+(secrets cannot be optional until the core supports it). A secret is read only when a
+calendar of its type is configured, so a placeholder is never parsed.
+
+At each call the plugin exchanges the refresh token at `oauth2.googleapis.com/token` for an
+**access token (about an hour)**, used for every calendar of that account in the call and
+then dropped: it is kept in memory only, never written, logged, returned or put in an
+error, and the refresh token is sent only to that endpoint (over `https`, same-origin
+redirects only, like the bearer token to `www.googleapis.com`). If Google answers 401 to an
+access token the plugin exchanges once more and retries once. There is no state between
+calls, so there is nothing to refresh in the background.
+
+**Rotation.** Google keeps the refresh token valid until it is revoked, so there is no
+periodic rotation. To rotate or revoke: remove the app at
+[myaccount.google.com/permissions](https://myaccount.google.com/permissions), run
+`google-auth` again and replace the secret. Also reset the client secret in the Cloud
+console if it may have leaked. The refresh token stops working (`auth_failed`) if the user
+revokes it, leaves it unused for six months, hits Google's per-account limit on refresh
+tokens (the oldest are dropped), or the app is in "Testing" for more than 7 days.
+
+### Hosts
+
+`plugin.yaml` declares `oauth2.googleapis.com` (the token exchange) and `www.googleapis.com`
+(the Calendar API). The plugin sends the tokens to these two hosts only; nothing goes through
+`allowed_hosts`.
+
+### Google failures
+
+<a id="google-failures"></a>
+
+| Reason | What happened |
+|---|---|
+| `auth_failed` | Google refused the refresh token (`invalid_grant`: revoked, expired, or the app is in **Testing** and the token is older than 7 days; or `invalid_client`: wrong client id or secret), or still answered 401 after a fresh token. Run `google-auth` again, after publishing the app ("In production"). |
+| `rate_limited` | HTTP 429, or 403 with `rateLimitExceeded`, `userRateLimitExceeded` or `quotaExceeded`. Not retried; the next run tries again. |
+| `http_403` | The API is not enabled in the project, or the scope does not allow this calendar. `http_404`: unknown `calendar_id`. |
+| `bad_response`, `token_http_<status>` | An answer that is not what Google documents, or another refusal by the token endpoint. |
+| `timeout`, `connect_failed`, `tls_failed`, `transport_failed`, `http_5xx` | Google is down or slow (retried once). |
+
+Google's own message is never shown: it can quote what was sent.
+
+To check against a real account (CI cannot): create the OAuth client and the token as above,
+put the secret in place, and run `calendar.events: { calendars: [{ name: Perso, type: google }],
+days: 7 }`. Expect `complete: true`, your events with recurring ones expanded, and the
+right times; `auth_failed` right after set-up points to the consent screen status or to a
+token from a previous client.
+
 ## Configure and install
 
 ### The feed URLs are a secret
@@ -366,9 +491,12 @@ preparation; each matching event occurrence gets one task, due `lead_days` befor
 |---|---|---|
 | network | `calendar.google.com` | Google Calendar secret addresses (ICS) |
 | network | `calendar.proton.me` | Proton Calendar share links (ICS) |
+| network | `www.googleapis.com` | Google Calendar API (`events.list`, read-only scope) |
+| network | `oauth2.googleapis.com` | Google's token endpoint (refresh token to access token) |
 | network | `caldav.icloud.com` | iCloud CalDAV (a shard `pNN-caldav.icloud.com` is added per instance) |
 | secret | `CALENDAR_ICS_URLS` | The feed URLs, separated by spaces (each holds an access token) |
 | secret | `CALENDAR_CALDAV` | CalDAV `url user password` triples, separated by whitespace (the credentials) |
+| secret | `CALENDAR_GOOGLE` | Google `client_id client_secret refresh_token` triples, separated by whitespace (the OAuth credentials) |
 | paths | none | |
 | intents | `task.create` | `calendar.prep_tasks` proposes preparation tasks (a task sink applies them) |
 
@@ -384,6 +512,8 @@ uv run python -m horae_calendar --manifest > plugin.yaml
 
 - `src/horae_calendar/caldav.py`: the `calendar-query`, the hardened multistatus parser and the
   merge of resources into one feed for `ics.expand`.
+- `src/horae_calendar/google.py`: the token exchange, `events.list` and the mapping;
+  `google_auth.py`: the one-time consent helper (`python -m horae_calendar google-auth`).
 - `src/horae_calendar/events.py`: the event model (`Event`, `Window`, ids, text cleaning),
   kept apart from ICS so the CalDAV (#3) and Google (#4) sources and the preparation-tasks
   transform (#5) reuse it.
@@ -397,6 +527,9 @@ uv run python -m horae_calendar --manifest > plugin.yaml
   ghcr.io/kozea/radicale:3.5.7 --hosts 0.0.0.0:5232 --auth-type htpasswd --auth-htpasswd-filename
   /users --auth-htpasswd-encryption plain` with `alice:synthetic-test-pass` in `users`, then
   `CALDAV_TEST_URL=http://127.0.0.1:5232 uv run pytest tests/test_integration_caldav.py`.
+- **Google tests** run a fake token endpoint and `events.list` server on `127.0.0.1`
+  (refresh, `invalid_grant`, 401 then refresh, pagination, 429 and `rateLimitExceeded`, tokens
+  never in output, errors or logs).
 - Other tests never touch the network: a fake fetcher serves the fixtures to the tool, and the
   HTTP client is tested against HTTP and HTTPS servers on `127.0.0.1` (a `trustme` CA).
   `tests/recordings/` replays the tool through MCP; every fixture is synthetic, with

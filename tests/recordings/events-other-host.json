@@ -14,6 +14,11 @@
       "ics.example.org"
     ]
   },
+  "network": [
+    "calendar.google.com",
+    "calendar.proton.me",
+    "ics.example.org"
+  ],
   "expect": {
     "data": {
       "window": {

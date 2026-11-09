@@ -3,8 +3,13 @@
 Every change to tools, parameters and permissions. A new permission is called out: users
 must approve it.
 
-## Unreleased
+## 0.1.1
 
+- **Hosts the user did not approve are refused** (horae-sdk 0.5, core #156): the core sends the
+  `permissions.network` approved in `horae.lock`, and a calendar (ICS, CalDAV or Google) whose
+  host is not in it is skipped with `host_not_approved: <host>` before anything is contacted.
+  A credentialed CalDAV redirect (an iCloud shard) must be in the list too. An older core that
+  sends no list keeps today's check (declared hosts and `allowed_hosts`). Requires horae-sdk 0.5.
 - **Optional secrets** (core decision 56): `CALENDAR_ICS_URLS`, `CALENDAR_CALDAV` and
   `CALENDAR_GOOGLE` move from `permissions.secrets` to `permissions.optional_secrets`; no
   placeholder is needed for a calendar type you do not use, and a calendar of a type whose

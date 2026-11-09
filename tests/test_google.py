@@ -117,7 +117,8 @@ def plugin_for(secret: str | None = SECRET) -> Plugin:
 
 def run(plugin: Plugin, **params: Any) -> Any:
     async def go() -> Any:
-        return await call(plugin, "calendar.events", params)
+        # network=None: the fake server is local http, never an approved https host
+        return await call(plugin, "calendar.events", params, network=None)
 
     return anyio.run(go)
 

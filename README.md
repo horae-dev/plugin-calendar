@@ -430,8 +430,12 @@ host (Fastmail, Nextcloud, a school's calendar):
    core's egress proxy allows only the hosts locked there, and refuses hosts that resolve
    to private addresses);
 2. list the same host in the call's `allowed_hosts` (a lowercase DNS name: no scheme, port,
-   IP address or `localhost`). The plugin cannot read `horae.lock`, so this list must match
-   what you approved there; the core enforces the lock from M5.
+   IP address or `localhost`). Since horae-sdk 0.5 the core also sends the hosts approved in
+   `horae.lock` with every call, and a calendar whose host is not among them (ICS, CalDAV
+   or Google, and a credentialed CalDAV redirect to an iCloud shard) is skipped with
+   `host_not_approved: <host>` before it is contacted. With an older core that sends no
+   list, `allowed_hosts` must match what you approved there; the core enforces the lock
+   itself from M5.
 
 The plugin checks the URL's host against the declared hosts and `allowed_hosts` before
 connecting, and follows a redirect only to the same scheme, host and port (at most 3), so

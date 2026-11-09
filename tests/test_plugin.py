@@ -13,6 +13,7 @@ from horae_sdk.testing import Replayed, call
 
 import horae_calendar.plugin as plugin_module
 from conftest import (
+    APPROVED,
     BROKEN,
     DOWN,
     EMPTY,
@@ -35,7 +36,7 @@ FAMILY = {"name": "Family", "index": 2}
 
 def run(plugin: Plugin, **params: Any) -> Replayed:
     async def go() -> Replayed:
-        return await call(plugin, TOOL, params)
+        return await call(plugin, TOOL, params, network=APPROVED)
 
     return anyio.run(go)
 

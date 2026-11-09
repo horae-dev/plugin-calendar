@@ -430,7 +430,7 @@ wheels = [
 
 [[package]]
 name = "horae-plugin-calendar"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "horae-sdk" },
@@ -475,8 +475,8 @@ dev = [
 
 [[package]]
 name = "horae-sdk"
-version = "0.3.0"
-source = { git = "https://github.com/horae-dev/horae?subdirectory=sdk&branch=main#648ddb0a21c5998ae84f30200923758dda32d80e" }
+version = "0.5.0"
+source = { git = "https://github.com/horae-dev/horae?subdirectory=sdk&branch=main#c555c39e8315cd86f0282346b0e976cce7f273ef" }
 dependencies = [
     { name = "anyio" },
     { name = "mcp" },

@@ -5,6 +5,7 @@ import dataclasses
 import datetime as dt
 import time
 from collections.abc import Iterator
+from functools import partial
 
 import pytest
 
@@ -376,7 +377,7 @@ def test_this_and_future_through_the_tool_returns_every_day() -> None:
     import anyio
     from horae_sdk.testing import call
 
-    from conftest import NOW, FakeFetcher, url
+    from conftest import APPROVED, NOW, FakeFetcher, url
     from horae_calendar import build
 
     data = (
@@ -392,7 +393,7 @@ def test_this_and_future_through_the_tool_returns_every_day() -> None:
         FakeFetcher({url("t"): data}), environ={"CALENDAR_ICS_URLS": url("t")}, clock=lambda: NOW
     )
     params = {"start": "2026-10-26", "days": 7, "timezone": "Europe/Paris"}
-    replayed = anyio.run(call, plugin, "calendar.events", params)
+    replayed = anyio.run(partial(call, network=APPROVED), plugin, "calendar.events", params)
     assert replayed.error is None
     starts = [e["start"][:10] for e in replayed.data["events"]]
     assert starts == [f"2026-10-{d}" for d in (26, 27, 28, 29, 30, 31)] + ["2026-11-01"]

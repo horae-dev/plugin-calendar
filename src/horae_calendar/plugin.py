@@ -44,7 +44,7 @@ from horae_calendar.ics import Expansion, IcsError, expand
 
 NAME = "calendar"
 """The plugin's name, also the namespace of its refs (`calendar.events`) and event ids."""
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 HORAE = ">=0,<0.2"
 COMMAND = ["python3", "-m", "horae_calendar"]
 """`runtime.command` of `plugin.yaml`. When installing, pin an absolute interpreter that has
@@ -143,7 +143,9 @@ def build(
         (default: the instance's, `TZ`; pass `"{{date}}"` and `"{{timezone}}"` from the
         pipeline), from each calendar's ICS feed (default: every URL of the secret).
         `allowed_hosts` adds feed hosts to the declared ones (they must match what was
-        approved in `horae.lock`); `partial` returns what the working calendars give when
+        approved in `horae.lock`, which the core also sends: a calendar whose host it does not
+        approve is skipped, naming the host; an older core sends no list and only
+        `allowed_hosts` applies); `partial` returns what the working calendars give when
         another fails, instead of raising."""
         specs = _calendars(calendars)
         hosts = frozenset(HOSTS) | _hosts(allowed_hosts)
@@ -176,13 +178,24 @@ def build(
             for n in {spec["index"] for spec in specs if spec.get("type") == "google"}
         }
 
+        allows = call.host_allowed
+
         def read(spec: CalendarSpec) -> Coroutine[Any, Any, Expansion | str]:
             kind = spec.get("type", "ics")
             if kind == "caldav":
-                return _caldav(caldav_client, accounts[spec["index"] - 1], hosts, spec, window)
+                return _caldav(
+                    caldav_client,
+                    accounts[spec["index"] - 1],
+                    hosts,
+                    spec,
+                    window,
+                    call.host_allowed,
+                )
             if kind == "google":
-                return _google(google_client, tokens[spec["index"]], spec, window)
-            return _calendar(client, urls[spec["index"] - 1], hosts, spec, window)
+                return _google(google_client, tokens[spec["index"]], spec, window, allows)
+            return _calendar(
+                client, urls[spec["index"] - 1], hosts, spec, window, call.host_allowed
+            )
 
         results = await asyncio.gather(*(read(spec) for spec in specs))
         return Output(_merge(specs, results, window, partial=partial))
@@ -308,10 +321,31 @@ def _hosts(value: object) -> frozenset[str]:
     return frozenset(value)
 
 
+Allows = Callable[[str], bool | None]
+"""`Call.host_allowed`: `True` for an `https` URL on a host approved in `horae.lock`, `False`
+for any other, `None` when the core is older than horae-sdk 0.5 and sent no list."""
+
+
+def _unapproved(allows: Allows, url: str) -> str | None:
+    """The reason to skip a calendar whose URL the lock does not approve (it names the host,
+    never the rest of the URL, which can hold a token); `None` when it is approved or the
+    core sent no list (the declared and `allowed_hosts` check then stands, as before)."""
+    if allows(url) is False:
+        return f"host_not_approved: {urlsplit(url).hostname}"
+    return None
+
+
 async def _google(
-    client: Api, tokens: google.AccessTokens, spec: CalendarSpec, window: Window
+    client: Api,
+    tokens: google.AccessTokens,
+    spec: CalendarSpec,
+    window: Window,
+    allows: Allows,
 ) -> Expansion | str:
     """The Google calendar's events, or the reason it failed (a fixed code)."""
+    for endpoint in (google.TOKEN_URL, google.API_URL):  # the hosts this calendar contacts
+        if (reason := _unapproved(allows, endpoint)) is not None:
+            return reason
     try:
         return await google.read(
             client, tokens, spec.get("calendar_id", "primary"), spec["name"], window
@@ -330,11 +364,19 @@ async def _caldav(
     hosts: frozenset[str],
     spec: CalendarSpec,
     window: Window,
+    allows: Allows,
 ) -> Expansion | str:
     """The CalDAV calendar's events, or the reason it failed (a fixed code)."""
     try:
         url = check_url(account.url, hosts)
-        follow = caldav.shard_follow(urlsplit(url).hostname or "", hosts)
+        if (reason := _unapproved(allows, url)) is not None:
+            return reason
+        shard = caldav.shard_follow(urlsplit(url).hostname or "", hosts)
+
+        def follow(host: str) -> bool:
+            # The credentials follow a redirect only to a host the lock approves too.
+            return shard(host) and allows(f"https://{host}") is not False
+
         answer = await client.report(
             url,
             caldav.query(window),
@@ -364,10 +406,14 @@ async def _calendar(
     hosts: frozenset[str],
     spec: CalendarSpec,
     window: Window,
+    allows: Allows,
 ) -> Expansion | str:
     """The calendar's events, or the reason it failed (a fixed code)."""
     try:
-        data = await client.fetch(check_url(url, hosts))
+        checked = check_url(url, hosts)
+        if (reason := _unapproved(allows, checked)) is not None:
+            return reason
+        data = await client.fetch(checked)
         result = await asyncio.to_thread(expand, data, spec["name"], window)
     except (FetchError, IcsError) as error:
         return error.reason

@@ -78,3 +78,18 @@ def fetcher() -> FakeFetcher:
 @pytest.fixture
 def plugin(fetcher: FakeFetcher) -> Plugin:
     return build(fetcher, environ=ENVIRON, clock=lambda: NOW)
+
+
+APPROVED = [
+    "caldav.icloud.com",
+    "calendar.google.com",
+    "calendar.proton.me",
+    "ics.example.org",
+    "oauth2.googleapis.com",
+    "p12-caldav.icloud.com",
+    "unlisted.example.org",
+    "www.googleapis.com",
+]
+"""The hosts the fake core approves in `horae.lock` for the tests (`network=` of the SDK's
+`call`): the declared ones and the synthetic hosts the tests allow with `allowed_hosts`. The
+recordings carry their own `network` key."""

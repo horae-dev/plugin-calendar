@@ -16,7 +16,7 @@ import pytest
 from horae_sdk import Plugin
 from horae_sdk.testing import call
 
-from conftest import NOW, TOKEN, FakeFetcher, feed, window
+from conftest import APPROVED, NOW, TOKEN, FakeFetcher, feed, window
 from horae_calendar import build, caldav
 from horae_calendar.fetch import FetchError, HttpFetcher
 from horae_calendar.ics import expand
@@ -76,7 +76,7 @@ def caldav_plugin(reporter: FakeReporter, secret: str | None = None) -> Plugin:
 
 def run(plugin: Plugin, **params: Any) -> Any:
     async def go() -> Any:
-        return await call(plugin, "calendar.events", params)
+        return await call(plugin, "calendar.events", params, network=APPROVED)
 
     return anyio.run(go)
 

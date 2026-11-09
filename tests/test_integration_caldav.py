@@ -123,7 +123,9 @@ def run(url: str, password: str = PASSWORD, **params: Any) -> Any:
         return url
 
     async def go() -> Any:
-        return await call(plugin, "calendar.events", {"timezone": "Europe/Paris", **params})
+        return await call(
+            plugin, "calendar.events", {"timezone": "Europe/Paris", **params}, network=None
+        )
 
     mp = pytest.MonkeyPatch()
     mp.setattr(plugin_module, "check_url", allow)

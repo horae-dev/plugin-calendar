@@ -44,7 +44,7 @@ from horae_calendar.ics import Expansion, IcsError, expand
 
 NAME = "calendar"
 """The plugin's name, also the namespace of its refs (`calendar.events`) and event ids."""
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 HORAE = ">=0,<0.2"
 COMMAND = ["python3", "-m", "horae_calendar"]
 """`runtime.command` of `plugin.yaml`. When installing, pin an absolute interpreter that has

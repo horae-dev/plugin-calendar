@@ -536,9 +536,8 @@ uv run python -m horae_calendar --manifest > plugin.yaml
 Runtime dependencies and their licences, including the two LGPL-3.0-or-later ones and what
 a distributor must ship with them, are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
-`horae-sdk` comes from the core repository's `main` branch (`[tool.uv.sources]`), pinned to a
-commit by `uv.lock`; dependencies resolve with a 7-day minimum release age
-(`exclude-newer`).
+`horae-sdk` comes from PyPI, pinned with hashes by `uv.lock`; Renovate waits 7 days before
+proposing a new release (`minimumReleaseAge`).
 
 ## Contributing
 

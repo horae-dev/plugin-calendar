@@ -4,7 +4,9 @@
 
 Horae plugin: calendars from ICS URLs, CalDAV and the Google Calendar API, with preparation tasks.
 
-> 🚧 **In progress.** The ICS, CalDAV and Google Calendar API sources (`calendar.events`) are in. Preparation tasks (`calendar.prep_tasks`) are in. Follow progress on the [Horae roadmap project](https://github.com/orgs/horae-dev/projects/1).
+**Docs:** <https://horae-dev.github.io/docs/plugins/calendar/>
+
+> 🚧 **Early (0.1.2, listed in the [marketplace](https://github.com/horae-dev/marketplace)).** The ICS, CalDAV and Google Calendar API sources (`calendar.events`) and preparation tasks (`calendar.prep_tasks`) are released. It runs under the process runtime only for now: under `runtime: container` it does not use the core's egress proxy yet (#15). Follow progress on the [Horae roadmap project](https://github.com/orgs/horae-dev/projects/1).
 
 It declares every host, secret, path and intent it uses in `plugin.yaml`, and it only returns
 data, except the `calendar.prep_tasks` transform, which proposes `task.create`; the
@@ -41,7 +43,7 @@ named `calendar-1`, `calendar-2`..., over today and tomorrow in the instance's t
 | `start` | today in `timezone` | The first day, `YYYY-MM-DD`. Pass `"{{date}}"`: a replayed run then reads the same window, where the default depends on the day it runs. |
 | `days` | `2` | Whole days, 1 to 62. |
 | `timezone` | the instance's (`TZ`) | IANA time zone of the window and of the times returned. The host sets the plugin's `TZ` to the instance's time zone; `UTC` when `TZ` is not an IANA name. Pass `"{{timezone}}"` to follow the trigger's. |
-| `allowed_hosts` | none | Feed hosts allowed besides the declared ones. They must match what you approved in `horae.lock` (enforced by the core from M5); see [Other hosts](#other-hosts). |
+| `allowed_hosts` | none | Feed hosts allowed besides the declared ones. They must match what you approved in `horae.lock` (the core sends that list with every call, and its egress proxy enforces it under `runtime: container`); see [Other hosts](#other-hosts). |
 | `partial` | `false` | When a calendar fails, return the others' events (`complete: false`) instead of raising. See [Failures](#failures). |
 
 ### Output
@@ -426,33 +428,39 @@ refused. Adding a calendar is adding a URL to the secret: no new permission to a
 `plugin.yaml` declares `calendar.google.com` and `calendar.proton.me`. For a feed on another
 host (Fastmail, Nextcloud, a school's calendar):
 
-1. add the host to `permissions.network` and approve it in `horae.lock` (from M5, the
-   core's egress proxy allows only the hosts locked there, and refuses hosts that resolve
-   to private addresses);
+1. grant the host at install (`horae plugin add calendar --allow-host calendar.example.org`),
+   which approves it in `horae.lock` (under `runtime: container`, the core's egress proxy
+   allows only the hosts locked there, and refuses public names that resolve to private
+   addresses);
 2. list the same host in the call's `allowed_hosts` (a lowercase DNS name: no scheme, port,
    IP address or `localhost`). Since horae-sdk 0.5 the core also sends the hosts approved in
    `horae.lock` with every call, and a calendar whose host is not among them (ICS, CalDAV
    or Google, and a credentialed CalDAV redirect to an iCloud shard) is skipped with
    `host_not_approved: <host>` before it is contacted. With an older core that sends no
-   list, `allowed_hosts` must match what you approved there; the core enforces the lock
-   itself from M5.
+   list, `allowed_hosts` must match what you approved there; under `runtime: container` the
+   core's egress proxy enforces the lock itself.
 
 The plugin checks the URL's host against the declared hosts and `allowed_hosts` before
 connecting, and follows a redirect only to the same scheme, host and port (at most 3), so
 the token-bearing request never reaches another host.
 
-**Open question (M5).** The client ignores proxy variables from the environment
-(`trust_env=False`), so a proxy variable cannot see or divert the URL. If the M5 egress
-proxy is reached through `HTTPS_PROXY` (the core refuses secrets named `*_PROXY`, so it
-would be the host's own variable) rather than transparently, the plugin will need to accept
-that one proxy explicitly.
+**The egress proxy (core schemas decision 76).** The core's allow-list proxy is implemented:
+under `runtime: container` it is the plugin container's only way out, reached through
+`HORAE_EGRESS_PROXY` (also set as `HTTPS_PROXY`), and an HTTPS connection through it is a
+`CONNECT` tunnel, so the proxy never sees the URL. The client ignores proxy variables from the
+environment (`trust_env=False`) and does not pass `egress_proxy()` (horae-sdk 0.8) yet, so
+under `runtime: container` it cannot connect: [#15](https://github.com/horae-dev/plugin-calendar/issues/15).
+Under the process runtime (first-party plugins) it connects directly.
 
 ### Install
 
-The host starts `python3 -m horae_calendar` (`runtime.command`). Until Horae installs plugins
-into their own environments (M4), pin the command to an **absolute** interpreter that has this
-package, as the [SDK README](https://github.com/horae-dev/horae/blob/main/sdk/README.md#manifest)
-explains. It needs network access to the feed hosts and nothing else: no path, no intent.
+```sh
+horae plugin add calendar@0.1.2   # plus --allow-host <host> for a feed on another host
+```
+
+`horae plugin add` shows the permissions, pins the commit in `horae.lock` and installs the
+plugin in its own environment. It needs network access to the feed hosts and nothing else: no
+path, no intent.
 
 ## `calendar.prep_tasks`
 
